@@ -122,7 +122,7 @@ void Motion_control::update(){
 void Motion_control::calcU(){
 	if (ControlMethod == 0 || ControlMethod == 1) {
 		float xsrc[] = {madgwick.getRollRadians(), madgwick.getPitchRadians(), 0, g(0, 0), g(1, 0), g(2, 0)};
-		u = KC * dspm::Mat(xsrc, 6, 1);
+		u = -1 * KC * dspm::Mat(xsrc, 6, 1);
 	}
 	else if (ControlMethod == 2) {
 		// PID制御を適用

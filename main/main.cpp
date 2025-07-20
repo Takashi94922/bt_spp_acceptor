@@ -53,7 +53,7 @@ Motion_control motion;
         motion.xhat.data,
         motion.PRY_value,
         motion.u.data, 
-        motion.KCsrc
+        motion.KC.data
     );
 #endif
 

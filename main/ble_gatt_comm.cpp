@@ -334,9 +334,10 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Control U write");
                         }
                     } else if (param->write.handle == notify_targets[3].val_handle) { // Control Gain
-                        if (param->write.len == sizeof(float) * 5 * 6) { // 5x4 matrix
-                            memcpy(Ble_comm::controlGain, param->write.value, sizeof(float) * 5 * 6);
-                            ESP_LOGI(GATTS_TABLE_TAG, "Control Gain updated");
+                        constexpr size_t expected_bytes = sizeof(float) * 5 * 6; // 5要素の制御ゲイン、各要素は6つの値を持つ
+                        if (param->write.len == expected_bytes) {
+                            // raw uint8_t* → float array is safe via memcpy
+                            memcpy(Ble_comm::controlGain, param->write.value, expected_bytes);
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Control Gain write: %d", param->write.len);
                         }
