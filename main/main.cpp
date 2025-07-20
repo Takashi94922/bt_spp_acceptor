@@ -58,7 +58,6 @@ Motion_control motion;
 #endif
 
 TaskHandle_t bl_telem_handle_t = NULL;
-bool isControlEnable = false;
 //blでIMUデータを送信するのをノンブロッキングでやるためのタスク
 void telemetry_task(){
     //ESP_LOGI("Telem", "sending imu");
@@ -98,7 +97,7 @@ void IRAM_ATTR timer_callback(TimerHandle_t xTimer)
 {
     //ESP_LOGI("Timer", "reading.. imu");
     motion.update();
-    if(isControlEnable){
+    if(motion.ControlMethod != 0){
         //Thrust->setPWM((motion.u(0, 0)));
         Servo1->setPWM((motion.u(1, 0) + 50.0f));
         Servo2->setPWM((motion.u(2, 0) + 50.0f));
@@ -130,10 +129,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         ESP_ERROR_CHECK(Servo4->setPWM((float)msg[1]));
         break;
     case 5:
-        isControlEnable = true;
-        break;   
-    case 6:
-        isControlEnable = false;
+        motion.ControlMethod = msg[1];
         break;
     case 10:
         //Servoの一括設定

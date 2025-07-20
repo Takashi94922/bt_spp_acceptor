@@ -86,14 +86,22 @@ public:
 		}
 
 		float KCsrc[] = {
+			0, 0, 0, 0, 0, 0,
+			15.86266949,-15.63520979,15.93473977,2.21488678,-2.27063296,3.12740968,
+			-15.75994272,-15.63484338,16.03670408,-2.14538943,-2.23014932,3.13218773,
+			-15.76070739,15.98598765,15.68592687,-2.18592247,2.37452686,3.11587255,
+			15.86190483,15.98562124,15.58396255,2.17435375,2.33404323,3.1110945,
+		};
+		KC = dspm::Mat(KCsrc, 5, 6);
+
+		float KPIDsrc[] = {
 			0, 0, 0,
 			-1,  1,  0.5,
 			-1,  -1,  0.5,
 			1, -1,  0.5,
 			1, 1,  0.5,
 		};
-			
-		KC = dspm::Mat(KCsrc, 5, 3);
+		KPID = dspm::Mat(KPIDsrc, 5, 3);
 
 		// PID制御用のインスタンス
 		pitch_pid = {6.0f, 0.0f, 3.0f, 0.0f, 0.0f, 0.0f};
@@ -117,7 +125,7 @@ public:
 	dspm::Mat u = dspm::Mat(5, 1);
 	//単位はrad
 	float PRY_value[3] = {0};
-	dspm::Mat F, B, H, Q, R, KC;
+	dspm::Mat F, B, H, Q, R, KC, KPID;
 	float *KCsrc = KC.data;
 	dspm::Mat P = dspm::Mat::eye(6);
 	dspm::Mat xhat = dspm::Mat(6, 1);
@@ -125,6 +133,7 @@ public:
 	float thetadot[3] = {0};
 	float dt = 0.05f;
 	PID pitch_pid, roll_pid, yaw_pid;
+	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
 
 	void begin(float sampleFreq, i2c_master_bus_handle_t bus_handle);
     void Sensor2Body(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz);

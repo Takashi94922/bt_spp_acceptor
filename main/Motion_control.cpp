@@ -23,17 +23,6 @@ namespace dspm_utils {
   }
 } // namespace dspm_utils
 
-// PID制御計算関数
-float Motion_control::calculatePID(PID &pid, float current) {
-    float error = pid.target - current; // 誤差
-    pid.integral += error * dt;     // 積分項
-    float derivative = (error - pid.prev_error) / dt; // 微分項
-    pid.prev_error = error;         // 前回の誤差を更新
-
-    // PID制御出力
-    return pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
-}
-
 void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle){
  	if(imu.begin(LSM9DS1_AG_ADDR(0), LSM9DS1_M_ADDR(0), bus_handle) == 0){
         ESP_LOGE(TAG, "imu initialize faile");
@@ -131,18 +120,33 @@ void Motion_control::update(){
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
 }
 void Motion_control::calcU(){
-	//float xsrc[] = {g(0, 0), g(1, 0), g(2, 0), madgwick.getPitchRadians(), madgwick.getRollRadians(), 0};
-	//u = KC * dspm::Mat(xsrc, 6, 1);
+	if (ControlMethod == 0 || ControlMethod == 1) {
+		float xsrc[] = {madgwick.getRollRadians(), madgwick.getPitchRadians(), 0, g(0, 0), g(1, 0), g(2, 0)};
+		u = KC * dspm::Mat(xsrc, 6, 1);
+	}
+	else if (ControlMethod == 2) {
+		// PID制御を適用
+		float xsrc[3];
+		xsrc[0] = calculatePID(pitch_pid, PRY_value[0]);
+		xsrc[1] = calculatePID(roll_pid, PRY_value[1]);
+		xsrc[2] = calculatePID(yaw_pid, PRY_value[2]);
 
-    // PID制御を適用
-	float xsrc[3];
-    xsrc[0] = calculatePID(pitch_pid, PRY_value[0]);
-    xsrc[1] = calculatePID(roll_pid, PRY_value[1]);
-    xsrc[2] = calculatePID(yaw_pid, PRY_value[2]);
-
-    // 制御出力を使用して次の処理を実行
-    u = KC * dspm::Mat(xsrc, 3, 1);
+    	// 制御出力を使用して次の処理を実行
+    	u = KPID * dspm::Mat(xsrc, 3, 1);
+	}
 }
+
+// PID制御計算関数
+float Motion_control::calculatePID(PID &pid, float current) {
+    float error = pid.target - current; // 誤差
+    pid.integral += error * dt;     // 積分項
+    float derivative = (error - pid.prev_error) / dt; // 微分項
+    pid.prev_error = error;         // 前回の誤差を更新
+
+    // PID制御出力
+    return pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
+}
+
 // PRY値を取得する関数単位は度
 void Motion_control::getPRY(float* retbuf){
 	retbuf[0] = madgwick.getPitchRadians();
