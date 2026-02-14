@@ -90,12 +90,18 @@ void bl_telemetry_callback(TimerHandle_t xTimer)
         xTaskCreate( (TaskFunction_t)telemetry_task, "TelemetryTask", 4096, NULL, 1, &bl_telem_handle_t);
     }
 }
-
-// タイマーコールバック関数を定義します。
+// IMU用タイマーコールバック関数を定義します。
 void IRAM_ATTR timer_callback(TimerHandle_t xTimer)
 {
     //ESP_LOGI("Timer", "reading.. imu");
     motion.update();
+}
+
+// 制御用タイマーコールバック関数を定義します。
+void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
+{
+    //ESP_LOGI("Timer", "calculating.. u");
+    motion.calcU();
     if(motion.ControlMethod != 0){
         //Thrust->setPWM((motion.u(0, 0)));
         Servo1->setPWM(motion.u(1, 0));
@@ -105,6 +111,7 @@ void IRAM_ATTR timer_callback(TimerHandle_t xTimer)
     }
 }
 
+
 static void command_cb(uint8_t *msg, uint16_t msglen){
     char SPPmsg[64] = "";
     ESP_LOG_BUFFER_HEX(TAG, msg, msglen);
@@ -112,7 +119,6 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
     switch (msg[0])
     {
     case 0:
-        /* code */
         ESP_ERROR_CHECK(Thrust->setPWM((float)msg[1]));   
         break;
     case 1:
@@ -299,6 +305,20 @@ extern "C" void app_main(void)
 
     // タイマーを開始します。
     if (xTimerStart(timer, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start timer.");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Create CalcU Timer");
+    const int CalcU_sampling_ms = 100;
+    TimerHandle_t timerU = xTimerCreate("CalcU Timer", pdMS_TO_TICKS(CalcU_sampling_ms), pdTRUE, (void *) 1, timerU_callback);
+    if (timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create timer.");
+        return;
+    }
+
+    // タイマーを開始します。
+    if (xTimerStart(timerU, 0) != pdPASS) {
         ESP_LOGE(TAG, "Failed to start timer.");
         return;
     }

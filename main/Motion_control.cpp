@@ -114,8 +114,6 @@ void Motion_control::update(){
 
 	filtaUpdate();
 
-	calcU();
-	
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
 }
@@ -185,18 +183,12 @@ void Motion_control::correctInitValue(uint16_t num_loop){
         imu.readGyro();
 		imu.readAccel();
 		imu.readMag();
-
-		//g0[0] += imu.gx;
-		//g0[1] += imu.gy;
-		//g0[2] += imu.gz;
-
-		//a0[0] += imu.ax;
-		//a0[1] += imu.ay;
-		//a0[2] += imu.az;
-
-		//m0[0] += imu.mx;
-		//m0[1] += imu.my;
-		//m0[2] += imu.mz;
+		for (uint8_t i = 0; i < 3; i++)
+		{
+			g0[i] += imu.gx;
+			a0[i] += imu.ax;
+			m0[i] += imu.mx;
+		}
 	}
 	for (uint8_t i = 0; i<3; i++){
 		g0[i] = g0[i]/num_loop;
