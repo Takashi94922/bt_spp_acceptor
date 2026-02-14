@@ -34,7 +34,6 @@
 #define SERVO_TIMEBASE_PERIOD        20000    // 20000 ticks, 20ms
 
 #define TAG "ESP_SPP_DRONE"
-const float IMU_sampling_ms = 100;
 
 //#define COMM_MODE_BT_SPP
 
@@ -99,10 +98,10 @@ void IRAM_ATTR timer_callback(TimerHandle_t xTimer)
     motion.update();
     if(motion.ControlMethod != 0){
         //Thrust->setPWM((motion.u(0, 0)));
-        Servo1->setPWM((motion.u(1, 0) + 50.0f));
-        Servo2->setPWM((motion.u(2, 0) + 50.0f));
-        Servo3->setPWM((motion.u(3, 0) + 50.0f));
-        Servo4->setPWM((motion.u(4, 0) + 50.0f));
+        Servo1->setPWM(motion.u(1, 0));
+        Servo2->setPWM(motion.u(2, 0));
+        Servo3->setPWM(motion.u(3, 0));
+        Servo4->setPWM(motion.u(4, 0));
     }
 }
 

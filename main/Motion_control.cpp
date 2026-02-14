@@ -121,8 +121,8 @@ void Motion_control::update(){
 }
 void Motion_control::calcU(){
 	if (ControlMethod == 0 || ControlMethod == 1) {
-		float xsrc[] = {madgwick.getRollRadians(), madgwick.getPitchRadians(), 0, g(0, 0), g(1, 0), g(2, 0)};
-		u = -1 * KC * dspm::Mat(xsrc, 6, 1);
+		float xsrc[] = {0, 0, 0, madgwick.getPitchRadians(), madgwick.getRollRadians(), 0};
+		u = -1 * KC * dspm::Mat(xsrc, 6, 1) + 75.0f;
 	}
 	else if (ControlMethod == 2) {
 		// PID制御を適用
@@ -132,7 +132,18 @@ void Motion_control::calcU(){
 		xsrc[2] = calculatePID(yaw_pid, PRY_value[2]);
 
     	// 制御出力を使用して次の処理を実行
-    	u = KPID * dspm::Mat(xsrc, 3, 1);
+    	u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
+	}
+	else if(ControlMethod == 3){
+		//padの象限によって制御対象を変える
+		float c45 = 0.70710678f;
+		float dx = KPID(1, 0)*PRY_value[1];
+		float dy = KPID(0, 0)*PRY_value[0];
+		float dz = KPID(3, 0)*PRY_value[3];
+		u(1, 0) = c45 * dx + c45 * dy < 0 ? 0 : (c45 * dx + c45 * dy) * 50;
+		u(2, 0) = c45 * dx - c45 * dy < 0 ? 0 : (c45 * dx - c45 * dy) * 50;
+		u(3, 0) = -c45 * dx - c45 * dy < 0 ? 0 : (-c45 * dx - c45 * dy) * 50;
+		u(4, 0) = -c45 * dx + c45 * dy < 0 ? 0 : (-c45 * dx + c45 * dy) * 50;
 	}
 }
 
@@ -147,7 +158,7 @@ float Motion_control::calculatePID(PID &pid, float current) {
     return pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
 }
 
-// PRY値を取得する関数単位は度
+// PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
 	retbuf[0] = madgwick.getPitchRadians();
 	retbuf[1] = madgwick.getRollRadians();
