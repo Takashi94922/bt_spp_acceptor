@@ -259,13 +259,13 @@ void Madgwick::computeAngles()
 void Madgwick::retBodyAngles(float *rv)
 {
     // --- 3) 機体座標系クォータニオンから Roll/Pitch/Yaw を計算（ZYX） ---
-    roll  = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
-    pitch = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
-    yaw   = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
+    pitch = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
+    yaw = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
+    roll   = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
 
-	rv[0] = yaw;
-	rv[1] = pitch;
-	rv[2] = roll;
+	rv[0] = pitch;
+	rv[1] = roll;
+	rv[2] = yaw;
     anglesComputed = 1;
 }
 void Madgwick::calcW(){

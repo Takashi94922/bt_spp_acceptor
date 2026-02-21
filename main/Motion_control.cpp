@@ -29,17 +29,17 @@ void Motion_control::Sensor2Body(){
 	//※LSM9DS1のg/aは左手系でmは右手系
 	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
 	a_imu(1, 0) = -imu.calcAccel(imu.ay) * gravity_c;
-	a_imu(2, 0) = -imu.calcAccel(imu.az) * gravity_c;
+	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
 	a = IMU_2_body * a_imu;
 
 	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
 	g_imu(1, 0) = -imu.calcGyro(imu.gy) * deg2rad;
-	g_imu(2, 0) = -imu.calcGyro(imu.gz) * deg2rad;
+	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
 	g = IMU_2_body * g_imu;
 
 	m_imu(0, 0) = -imu.calcMag(imu.mx - m0[0]) * 0.00014f;
 	m_imu(1, 0) = -imu.calcMag(imu.my - m0[1]) * 0.00014f;
-	m_imu(2, 0) = -imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
+	m_imu(2, 0) = imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
 	m = IMU_2_body * m_imu;
 
 	skew(g);
@@ -168,7 +168,7 @@ void Motion_control::getPRY(float* retbuf){
 	retbuf[2] = -madgwick.getYawRadians();
 	*/
 
-	//一気に機体座標系での回転量を入手roll pitch yawです
+	//一気に機体座標系での回転量を入手pitch roll yawです
 	madgwick.retBodyAngles(retbuf);
 }
 
