@@ -143,6 +143,14 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay, float az
 	q1 *= recipNorm;
 	q2 *= recipNorm;
 	q3 *= recipNorm;
+
+	//body座標への変換
+	// --- 2) q_body = q_mount * q_imu ---
+    qb0 = imw*q0 - imx*q1 - imy*q2 - imz*q3;
+    qb1 = imw*q1 + imx*q0 + imy*q3 - imz*q2;
+    qb2 = imw*q2 - imx*q3 + imy*q0 + imz*q1;
+    qb3 = imw*q3 + imx*q2 - imy*q1 + imz*q0;
+
 	anglesComputed = 0;
 }
 
@@ -246,6 +254,20 @@ void Madgwick::computeAngles()
 	yaw = atan2f(q1*q2 + q0*q3, 0.5f - q2*q2 - q3*q3);
 	anglesComputed = 1;
 }
+
+//直接機体座標系に変換する
+void Madgwick::retBodyAngles(float *rv)
+{
+    // --- 3) 機体座標系クォータニオンから Roll/Pitch/Yaw を計算（ZYX） ---
+    roll  = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
+    pitch = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
+    yaw   = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
+
+	rv[0] = yaw;
+	rv[1] = pitch;
+	rv[2] = roll;
+    anglesComputed = 1;
+}
 void Madgwick::calcW(){
 	wx = 2.0 *(qDot1 * q3 + qDot2 * q2 - qDot3 * q1 - qDot4 * q0);
 	wy = 2.0 *(qDot2 * q3 + qDot3 * q0 - qDot1 * q2 - qDot4 * q1);
@@ -253,19 +275,35 @@ void Madgwick::calcW(){
 }
 
 void Madgwick::trans(float *rv, float *v){
-	float R[3][3] = {
-		{ 1 - 2*(q2*q2 + q3*q3),   2*(q1*q2 - q0*q3),   2*(q1*q3 + q0*q2) },
-		{ 2*(q1*q2 + q0*q3),       1 - 2*(q1*q1 + q3*q3), 2*(q2*q3 - q0*q1) },
-		{ 2*(q1*q3 - q0*q2),       2*(q2*q3 + q0*q1),    1 - 2*(q1*q1 + q2*q2) }
-	};
-	rv[0] = 0;
-	rv[1] = 0;
-	rv[2] = 0;
-	for (uint8_t i = 0; i < 3; i++)
-	{
-		for (uint8_t j = 0; j < 3; j++)
-		{
-			rv[i] += R[i][j] * v[j];
-		}
-	}
+    // q = (q0, q1, q2, q3)
+    float vx = v[0];
+    float vy = v[1];
+    float vz = v[2];
+
+    // t = 2 * cross(q.xyz, v)
+    float tx = 2.0f * (q2 * vz - q3 * vy);
+    float ty = 2.0f * (q3 * vx - q1 * vz);
+    float tz = 2.0f * (q1 * vy - q2 * vx);
+
+    // v' = v + q0 * t + cross(q.xyz, t)
+    rv[0] = vx + q0 * tx + (q2 * tz - q3 * ty);
+    rv[1] = vy + q0 * ty + (q3 * tx - q1 * tz);
+    rv[2] = vz + q0 * tz + (q1 * ty - q2 * tx);
+}
+
+void Madgwick::trans2body(float *rv, float *v){
+    // --- 2) 次に、q_body でベクトル v を回転 ---
+    float vx = v[0];
+    float vy = v[1];
+    float vz = v[2];
+
+    // t = 2 * cross(q.xyz, v)
+    float tx = 2.0f * (qb2 * vz - qb3 * vy);
+    float ty = 2.0f * (qb3 * vx - qb1 * vz);
+    float tz = 2.0f * (qb1 * vy - qb2 * vx);
+
+    // v' = v + q0 * t + cross(q.xyz, t)
+    rv[0] = vx + qb0 * tx + (qb2 * tz - qb3 * ty);
+    rv[1] = vy + qb0 * ty + (qb3 * tx - qb1 * tz);
+    rv[2] = vz + qb0 * tz + (qb1 * ty - qb2 * tx);
 }

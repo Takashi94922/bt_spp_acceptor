@@ -10,10 +10,10 @@
 // 3×1 行列から 3×3 のスキュー対称行列を生成
 void Motion_control::skew( dspm::Mat &v )
 {
-// v(i,0) は i 行目の要素
-skewM(0,0) =  0;         skewM(0,1) = -v(2,0);  skewM(0,2) =  v(1,0);
-skewM(1,0) =  v(2,0);    skewM(1,1) =  0;       skewM(1,2) = -v(0,0);
-skewM(2,0) = -v(1,0);    skewM(2,1) =  v(0,0);  skewM(2,2) =  0;
+	// v(i,0) は i 行目の要素
+	skewM(0,0) =  0;         skewM(0,1) = -v(2,0);  skewM(0,2) =  v(1,0);
+	skewM(1,0) =  v(2,0);    skewM(1,1) =  0;       skewM(1,2) = -v(0,0);
+	skewM(2,0) = -v(1,0);    skewM(2,1) =  v(0,0);  skewM(2,2) =  0;
 }
 
 void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle){
@@ -26,20 +26,21 @@ void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle)
 
 void Motion_control::Sensor2Body(){
 	//imu座標から機体座標系
+	//※LSM9DS1のg/aは左手系でmは右手系
 	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
-	a_imu(1, 0) = imu.calcAccel(imu.ay) * gravity_c;
-	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
+	a_imu(1, 0) = -imu.calcAccel(imu.ay) * gravity_c;
+	a_imu(2, 0) = -imu.calcAccel(imu.az) * gravity_c;
 	a = IMU_2_body * a_imu;
 
 	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
-	g_imu(1, 0) = imu.calcGyro(imu.gy) * deg2rad;
-	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
+	g_imu(1, 0) = -imu.calcGyro(imu.gy) * deg2rad;
+	g_imu(2, 0) = -imu.calcGyro(imu.gz) * deg2rad;
 	g = IMU_2_body * g_imu;
 
-	m_imu(0, 0) = imu.calcMag(imu.mx - m0[0]) * 0.00014f;
-	m_imu(1, 0) = imu.calcMag(imu.my - m0[1]) * 0.00014f;
-	m_imu(2, 0) = imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
-	m = IMU_2_body_mag * m_imu;
+	m_imu(0, 0) = -imu.calcMag(imu.mx - m0[0]) * 0.00014f;
+	m_imu(1, 0) = -imu.calcMag(imu.my - m0[1]) * 0.00014f;
+	m_imu(2, 0) = -imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
+	m = IMU_2_body * m_imu;
 
 	skew(g);
 	centripetal = skewM * (skewM * x_IMU);
@@ -91,9 +92,10 @@ void Motion_control::update(){
     imu.readMag();
 
 	//IMU座標系で姿勢を計算
-	madgwick.update(imu.calcGyro(imu.gx), imu.calcGyro(imu.gy), imu.calcGyro(imu.gz),
-				imu.calcAccel(imu.ax), imu.calcAccel(imu.ay), imu.calcAccel(imu.az),
-				imu.calcMag(imu.mx - m0[0]), imu.calcMag(imu.my - m0[1]), imu.calcMag(imu.mz - m0[2]));
+	//※LSM9DS1のg/aは左手系でmは右手系
+	madgwick.update(imu.calcGyro(imu.gx), -imu.calcGyro(imu.gy), imu.calcGyro(imu.gz),
+				imu.calcAccel(imu.ax), -imu.calcAccel(imu.ay), imu.calcAccel(imu.az),
+				-imu.calcMag(imu.mx - m0[0]), -imu.calcMag(imu.my - m0[1]), imu.calcMag(imu.mz - m0[2]));
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
@@ -102,14 +104,14 @@ void Motion_control::update(){
 	Sensor2Body();
 
 	//姿勢から重力の分力を減算
-	//地球からimu座標に変換
+	//地球からbody座標に変換
 	float gv_imusrc[3];
-	madgwick.trans(gv_imusrc, gv);
-	gv_imu(0, 0) = gv_imusrc[0];
-	gv_imu(1, 0) = gv_imusrc[1];
-	gv_imu(2, 0) = gv_imusrc[2];
+	madgwick.trans2body(gv_imusrc, gv);
+	a_grav(0, 0) = gv_imusrc[0];
+	a_grav(1, 0) = gv_imusrc[1];
+	a_grav(2, 0) = gv_imusrc[2];
 	//imuから機体に変換
-	a_grav = IMU_2_body * gv_imu;
+	//a_grav = IMU_2_body * gv_imu;
 	//重力加速度を引く
 	a = a - a_grav;
 
@@ -160,9 +162,14 @@ float Motion_control::calculatePID(PID &pid, float current) {
 // PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
 	//まずIMU座標系から機体座標系の姿勢角を取得する
+	/*
 	retbuf[0] = -madgwick.getPitchRadians();
 	retbuf[1] = -madgwick.getRollRadians();
 	retbuf[2] = -madgwick.getYawRadians();
+	*/
+
+	//一気に機体座標系での回転量を入手roll pitch yawです
+	madgwick.retBodyAngles(retbuf);
 }
 
 void Motion_control::calib(){

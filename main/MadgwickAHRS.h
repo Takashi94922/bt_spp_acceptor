@@ -39,7 +39,14 @@ private:
     //-------------------------------------------------------------------------------------------
     // Function declarations
 public:
-    float qDot1, qDot2, qDot3, qDot4;
+    float qDot1, qDot2, qDot3, qDot4,
+    qb0, qb1, qb2, qb3;
+    //IMUの取り付け角度に対するクオータニオン
+    static constexpr float imw = 0.5f;
+	static constexpr float imx = -0.5f;
+	static constexpr float imy = -0.5f;
+	static constexpr float imz = -0.5f;
+
     Madgwick();
     void begin(float sampleFrequency) { invSampleFreq = 1.0f / sampleFrequency; }
     void update(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz);
@@ -76,6 +83,8 @@ public:
     float getWx(){return wx;}
     float getWy(){return wy;}
     float getWz(){return wz;}
+    void trans2body(float *rv, float *v);
+    void retBodyAngles(float *rv);
 };
 #endif
 

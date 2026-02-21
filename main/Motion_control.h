@@ -24,17 +24,10 @@ class Motion_control{
 
 	float IMU2body_src[9] = {
 		0, 0, -1,
-		-1, 0, 0,
-		0, -1, 0
-	};
-	//磁気センサはX逆
-	float IMU2body_src_Mag[9] = {
-		0, 0, -1,
-		1, 0, 0,
-		0, -1, 0
+		0, -1, 0,
+		-1, 0, 0
 	};
 	dspm::Mat IMU_2_body = dspm::Mat(IMU2body_src, 3, 3);
-	dspm::Mat IMU_2_body_mag = dspm::Mat(IMU2body_src_Mag, 3, 3);
 public:
 	Motion_control(){
 		//x = [ax ay az vx vy vz]';
