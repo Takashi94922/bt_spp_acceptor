@@ -294,7 +294,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(bl_comm.begin());
 
     ESP_LOGI(TAG, "Create IMU");
-    const int IMU_sampling_ms = 10;
+    const int IMU_sampling_ms = 4;
     i2c_master_init(1000/IMU_sampling_ms);
     // タイマーを作成し、コールバック関数を設定します。
     TimerHandle_t timer = xTimerCreate("IMU Timer", pdMS_TO_TICKS(IMU_sampling_ms), pdTRUE, (void *) 1, timer_callback);
@@ -324,7 +324,7 @@ extern "C" void app_main(void)
     }
 
     // 新たなタイマーを作成し、コールバック関数を設定します。
-    TimerHandle_t bl_telemetry = xTimerCreate("BL Telemetry", pdMS_TO_TICKS(100), pdTRUE, (void *) 2, bl_telemetry_callback);
+    TimerHandle_t bl_telemetry = xTimerCreate("BL Telemetry", pdMS_TO_TICKS(200), pdTRUE, (void *) 2, bl_telemetry_callback);
     if (bl_telemetry == NULL) {
         ESP_LOGE(TAG, "Failed to create new timer.");
         return;

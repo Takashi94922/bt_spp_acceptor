@@ -7,21 +7,14 @@
 #include "dsp_platform.h"
 #include "mat.h"
 
-namespace dspm_utils {
-
-  // 3×1 行列から 3×3 のスキュー対称行列を生成
-  dspm::Mat skew( dspm::Mat &v )
-  {
-    dspm::Mat M(3, 3);
-
-    // v(i,0) は i 行目の要素
-    M(0,0) =  0;         M(0,1) = -v(2,0);  M(0,2) =  v(1,0);
-    M(1,0) =  v(2,0);    M(1,1) =  0;        M(1,2) = -v(0,0);
-    M(2,0) = -v(1,0);    M(2,1) =  v(0,0);  M(2,2) =  0;
-
-    return M;
-  }
-} // namespace dspm_utils
+// 3×1 行列から 3×3 のスキュー対称行列を生成
+void Motion_control::skew( dspm::Mat &v )
+{
+// v(i,0) は i 行目の要素
+skewM(0,0) =  0;         skewM(0,1) = -v(2,0);  skewM(0,2) =  v(1,0);
+skewM(1,0) =  v(2,0);    skewM(1,1) =  0;       skewM(1,2) = -v(0,0);
+skewM(2,0) = -v(1,0);    skewM(2,1) =  v(0,0);  skewM(2,2) =  0;
+}
 
 void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle){
  	if(imu.begin(LSM9DS1_AG_ADDR(0), LSM9DS1_M_ADDR(0), bus_handle) == 0){
@@ -31,21 +24,30 @@ void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle)
 	madgwick.begin(sampleFreq);
 }
 
-void Motion_control::Sensor2Body(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz){
-	float a_src[3] = {ax, ay, az};
-	a = IMU_2_body * dspm::Mat(a_src, 3, 1);
-	float g_src[3] = {gx, gy, gz};
-	g = IMU_2_body * dspm::Mat(g_src, 3, 1);
+void Motion_control::Sensor2Body(){
+	//imu座標から機体座標系
+	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
+	a_imu(1, 0) = imu.calcAccel(imu.ay) * gravity_c;
+	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
+	a = IMU_2_body * a_imu;
 
-	//ジャイロの前回値を使うのでg=より先に計算
-	dspm::Mat centripetal = dspm_utils::skew(g) * (dspm_utils::skew(g) * dspm::Mat(x_IMU, 3, 1));
+	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
+	g_imu(1, 0) = imu.calcGyro(imu.gy) * deg2rad;
+	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
+	g = IMU_2_body * g_imu;
 
-	dspm::Mat ga = ((g - g_prev) * (1.0f /dt));
-    dspm::Mat tangential = dspm_utils::skew(ga) * dspm::Mat(x_IMU, 3, 1);
+	m_imu(0, 0) = imu.calcMag(imu.mx - m0[0]) * 0.00014f;
+	m_imu(1, 0) = imu.calcMag(imu.my - m0[1]) * 0.00014f;
+	m_imu(2, 0) = imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
+	m = IMU_2_body_mag * m_imu;
+
+	skew(g);
+	centripetal = skewM * (skewM * x_IMU);
+
+	ga = ((g - g_prev) * (1.0f /dt));
+    skew(ga);
+	tangential = skewM * x_IMU;
 	a = a - centripetal - tangential; //重心の座標系に変換
-
-	float m_src[3] = {mx, my, mz};
-	m = IMU_2_body_mag * dspm::Mat(m_src, 3, 1);
 
 	g_prev = g;
 }
@@ -88,31 +90,30 @@ void Motion_control::update(){
     imu.readGyro();
     imu.readMag();
 
-	//センサ取り付け角度の変換行列Rinst IMU座標系から重心の座標系へ
-	Sensor2Body(imu.calcGyro(imu.gx) * deg2rad, imu.calcGyro(imu.gy) * deg2rad, imu.calcGyro(imu.gz) * deg2rad,
-				imu.calcAccel(imu.ax) * gravity_c, imu.calcAccel(imu.ay) * gravity_c, imu.calcAccel(imu.az) * gravity_c,
+	//IMU座標系で姿勢を計算
+	madgwick.update(imu.calcGyro(imu.gx), imu.calcGyro(imu.gy), imu.calcGyro(imu.gz),
+				imu.calcAccel(imu.ax), imu.calcAccel(imu.ay), imu.calcAccel(imu.az),
 				imu.calcMag(imu.mx - m0[0]), imu.calcMag(imu.my - m0[1]), imu.calcMag(imu.mz - m0[2]));
 
-	//センサの姿勢を計算
-	//azだけ重力加速度込みの値を入れる
-	madgwick.update(g(0, 0) *rad2deg, g(1, 0) *rad2deg, g(2, 0) *rad2deg,
-					a(0, 0), a(1, 0), a(2, 0),
-					m(0, 0), m(1, 0), m(2, 0));
-	
+	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
 
+	//imu->機体座標の変換＋向心力の補正
+	Sensor2Body();
+
 	//姿勢から重力の分力を減算
-	float gv[] = {0.0, 0.0, -gravity_c};
-	float gv_bsrc[3] = {0.0};
-
-	madgwick.trans(gv_bsrc, gv);
-
-	dspm::Mat gv_b(gv_bsrc, 3, 1);
-
+	//地球からimu座標に変換
+	float gv_imusrc[3];
+	madgwick.trans(gv_imusrc, gv);
+	gv_imu(0, 0) = gv_imusrc[0];
+	gv_imu(1, 0) = gv_imusrc[1];
+	gv_imu(2, 0) = gv_imusrc[2];
+	//imuから機体に変換
+	a_grav = IMU_2_body * gv_imu;
 	//重力加速度を引く
-	a = a + gv_b;
+	a = a - a_grav;
 
-	filtaUpdate();
+	//filtaUpdate();
 
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
@@ -158,9 +159,10 @@ float Motion_control::calculatePID(PID &pid, float current) {
 
 // PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
-	retbuf[0] = madgwick.getPitchRadians();
-	retbuf[1] = madgwick.getRollRadians();
-	retbuf[2] = madgwick.getYawRadians();
+	//まずIMU座標系から機体座標系の姿勢角を取得する
+	retbuf[0] = -madgwick.getPitchRadians();
+	retbuf[1] = -madgwick.getRollRadians();
+	retbuf[2] = -madgwick.getYawRadians();
 }
 
 void Motion_control::calib(){

@@ -16,7 +16,9 @@ class Motion_control{
 	Madgwick madgwick;
 	dspm::Mat trans;
 	//Body座標系でみたときの重心位置[m]
-	float x_IMU[3] = {41.254E-3, 1.061E-3, 53.987E-3};
+	float x_IMU_src[3] = {41.254E-3, 1.061E-3, 53.987E-3};
+	dspm::Mat x_IMU = dspm::Mat(x_IMU_src, 3,1);
+
 	float g_prev_src[3] = {0.0f, 0.0f, 0.0f};
 	dspm::Mat g_prev = dspm::Mat(g_prev_src, 3,1);
 
@@ -88,10 +90,10 @@ public:
 
 		float KCsrc[] = {
 			0,0,0,0,0,0,
-			2.5303691,6.3249978,-4.4290784,44.534649,103.852,-1.7407752,
-			-2.5548081,6.1235034,-0.0396076,-42.480473,101.7184,0.0407247,
 			-2.5303691,-6.3249978,4.4290784,-44.534649,-103.852,1.7407752,
 			2.5548081,-6.1235034,0.0396076,42.480473,-101.7184,-0.0407247,
+			2.5303691,6.3249978,-4.4290784,44.534649,103.852,-1.7407752,
+			-2.5548081,6.1235034,-0.0396076,-42.480473,101.7184,0.0407247,
 		};
 		KC = dspm::Mat(KCsrc, 5, 6);
 
@@ -114,6 +116,7 @@ public:
 	const float deg2rad = 0.0174533;
 	const float rad2deg = 1.0/deg2rad;
 	const float mass = 1.66f;
+	float gv[3] = {0.0, 0.0, -gravity_c};
 	float a0[3] = {0};
 	float g0[3] = {0};
 	float m0[3] = {0};
@@ -124,6 +127,14 @@ public:
 	dspm::Mat v = dspm::Mat(3, 1);
 	dspm::Mat x = dspm::Mat(3, 1);
 	dspm::Mat u = dspm::Mat(5, 1);
+	dspm::Mat a_imu = dspm::Mat(3, 1);
+	dspm::Mat g_imu = dspm::Mat(3, 1);
+	dspm::Mat m_imu = dspm::Mat(3, 1);
+	dspm::Mat gv_imu = dspm::Mat(3, 1);
+	dspm::Mat centripetal = dspm::Mat(3, 1);
+	dspm::Mat ga = dspm::Mat(3, 1);
+	dspm::Mat tangential = dspm::Mat(3, 1);
+	dspm::Mat skewM = dspm::Mat(3, 3);
 	//単位はrad
 	float PRY_value[3] = {0};
 	dspm::Mat F, B, H, Q, R, KC, KPID;
@@ -137,7 +148,8 @@ public:
 	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
 
 	void begin(float sampleFreq, i2c_master_bus_handle_t bus_handle);
-    void Sensor2Body(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz);
+    void skew(dspm::Mat &v );
+	void Sensor2Body();
     void filtaUpdate();
     void update();
     void calcU();
