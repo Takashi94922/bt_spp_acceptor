@@ -110,6 +110,12 @@ void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
         Servo4->setPWM(motion.u(4, 0));
     }
 }
+// 制御用タイマーコールバック関数を定義します。
+void IRAM_ATTR timerKF_callback(TimerHandle_t xTimer)
+{
+    //ESP_LOGI("Timer", "calculating.. u");
+    motion.filterUpdate();
+}
 
 
 static void command_cb(uint8_t *msg, uint16_t msglen){
@@ -322,6 +328,22 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "Failed to start timer.");
         return;
     }
+
+    //kalman filter用たいまー
+    ESP_LOGI(TAG, "Create KF Timer");
+    const int CalcKF_sampling_ms = 10;
+    TimerHandle_t timerKF = xTimerCreate("CalcKF Timer", pdMS_TO_TICKS(CalcKF_sampling_ms), pdTRUE, (void *) 1, timerKF_callback);
+    if (timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create timer.");
+        return;
+    }
+
+    // タイマーを開始します。
+    if (xTimerStart(timerKF, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start timer.");
+        return;
+    }
+
 
     // 新たなタイマーを作成し、コールバック関数を設定します。
     TimerHandle_t bl_telemetry = xTimerCreate("BL Telemetry", pdMS_TO_TICKS(200), pdTRUE, (void *) 2, bl_telemetry_callback);

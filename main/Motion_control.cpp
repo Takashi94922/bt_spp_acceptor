@@ -20,7 +20,7 @@ void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle)
  	if(imu.begin(LSM9DS1_AG_ADDR(0), LSM9DS1_M_ADDR(0), bus_handle) == 0){
         ESP_LOGE(TAG, "imu initialize faile");
     }
-	dt =  1.0f / sampleFreq; //sampleFreqはHzなので、dtは秒
+	//dt =  1.0f / sampleFreq; //sampleFreqはHzなので、dtは秒
 	madgwick.begin(sampleFreq);
 }
 
@@ -52,30 +52,88 @@ void Motion_control::Sensor2Body(){
 
 	g_prev = g;
 }
-void Motion_control::filtaUpdate(){
+void Motion_control::filterUpdate(){
 	//ESP_LOGD(TAG, "kalman Start");
 	//x = F*x + B*u + Q
 	//y = H*x
 	
-	//x = [ax ay az vx vy vz]';
+	//角速度の変化率
+	madgwick.calcW();
+
+	//xの代入
+	//x = [vx, vy, vz, px, py , pz]';
+
+	//まず q = [q0, q1, q2, q3]^T
+	q(0, 0) = madgwick.qb0;
+	q(1, 0) = madgwick.qb1;
+	q(2, 0) = madgwick.qb2;
+	q(3, 0) = madgwick.qb3;
+
+    // 2) 世界座標系の加速度
+    dspm::Mat acc_world(3,1);
+    rotate(acc_world, q, a);      // a: 3x1 (body)
+    acc_world(2,0) += 9.80665f;   // 座標系に応じて符号調整
+
+    // 3) 状態の取り出し
+    float vx = xhat(0,0);
+    float vy = xhat(1,0);
+    float vz = xhat(2,0);
+    float px = xhat(3,0);
+    float py = xhat(4,0);
+    float pz = xhat(5,0);
+
+    // 4) 予測更新
+    vx += acc_world(0,0) * dt;
+    vy += acc_world(1,0) * dt;
+    vz += acc_world(2,0) * dt;
+
+    px += vx * dt + 0.5f * acc_world(0,0) * dt * dt;
+    py += vy * dt + 0.5f * acc_world(1,0) * dt * dt;
+    pz += vz * dt + 0.5f * acc_world(2,0) * dt * dt;
+
+    xhat(0,0) = vx;
+    xhat(1,0) = vy;
+    xhat(2,0) = vz;
+    xhat(3,0) = px;
+    xhat(4,0) = py;
+    xhat(5,0) = pz;
+
+	//F
+	F.clear();
+
+	// --- ṗ = v ---
+	F(3,0) = 1.0f;
+	F(4,1) = 1.0f;
+	F(5,2) = 1.0f;
 	
+	//phi = I + F dt
+	Phi = dspm::Mat::eye(6);
+	Phi += F * dt;
+
+	// --- P = Φ P Φᵀ + Q ---
+	// temp = Φ * P
+	temp = Phi * P;
+
+	// P = temp * Φᵀ
+	P = temp * Phi.t();
+
+	// Q を加算（プロセスノイズ）
+	P = P + Q;
+
 	//y= [ax ay az];
-	float ysrc[3] = {a(0, 0), a(1, 0), a(2, 0)};
-	dspm::Mat y(ysrc, 3, 1);
-	
-	//x = *** + Bu
-	//Lift = -318.2*alpha cos成分は /1.4142 => 225.0*alpha
- 	//u = [Thrust S1 S2  S3 S4]
+	// 世界座標系の加速度に変換
+	y(0, 0) = acc_world(0, 0);
+	y(1, 0) = acc_world(1, 0);
+	y(2, 0) = acc_world(2, 0);
 
-	//x = Fx + Bu;
-	//xhat = F * xhat + B * u;
-	xhat = F * xhat;
-
-	//P = F P F' + Q
-	P = F*P*F.t() + Q;
+	//H
+	H.clear();
+	// --- 加速度観測（0..2 行）---
+	H(0, 0) = 0.00f;
+	H(1, 1) = 0.0f;
+	H(2, 2) = 0.0f;
 
 	//K = P*H'*(R + H*P*H')^-1
-	dspm::Mat K(6, 3);
 	K = P*H.t()*(R + H*P*H.t()).inverse();
 
 	//xhat = xhat + K(y-Hx)
@@ -85,6 +143,34 @@ void Motion_control::filtaUpdate(){
 	P = (dspm::Mat::eye(6) - K*H)*P;
 	//ESP_LOGI(TAG, "Kalman Updated");
 }
+
+// out = R(q) * a
+// q: 4x1 (q0,q1,q2,q3)
+// a: 3x1 (ax,ay,az)
+// out: 3x1 (結果)
+
+void Motion_control::rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a)
+{
+	float w = q(0,0);
+	float x = q(1,0);
+	float y = q(2,0);
+	float z = q(3,0);
+
+	float ax = a(0,0);
+	float ay = a(1,0);
+	float az = a(2,0);
+
+	// 2*(q_vec × a)
+	float t2x = 2.0f * ( y*az - z*ay );
+	float t2y = 2.0f * ( z*ax - x*az );
+	float t2z = 2.0f * ( x*ay - y*ax );
+
+	// out = a + w*t2 + q_vec × t2
+	out(0,0) = ax + w*t2x + ( y*t2z - z*t2y );
+	out(1,0) = ay + w*t2y + ( z*t2x - x*t2z );
+	out(2,0) = az + w*t2z + ( x*t2y - y*t2x );
+}
+
 void Motion_control::update(){
 	imu.readTemp();
     imu.readAccel();
