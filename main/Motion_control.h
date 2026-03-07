@@ -9,7 +9,8 @@ struct PID {
 	float Kp, Ki, Kd;
 	float prev_error;
 	float integral;
-	float target; // 目標値（セットポイント）
+	float target = 0; // 目標値（セットポイント）
+	float calculatePID(float current, float dt);
 };
 class Motion_control{
 	LSM9DS1 imu;
@@ -74,16 +75,17 @@ public:
 
 		float KPIDsrc[] = {
 			0,0,0,
-			0.0046998,0.0110245,0.0001891,
-			0.0044878,-0.0108125,0.0005721,
-			-0.0046998,-0.0110245,-0.0001891,
-			-0.0044878,0.0108125,-0.0005721
+			-1, -1, 0,
+			1,-1, 0,
+			1,1, 0,
+			-1, 1, 0,	
 		};
 		KPID = dspm::Mat(KPIDsrc, 5, 3);
 
 		// PID制御用のインスタンス
-		pitch_pid = {6.0f, 0.0f, 3.0f, 0.0f, 0.0f, 0.0f};
-		roll_pid = {10.0f, 0.0f, 8.0f, 0.0f, 0.0f, 0.0f};
+		//吸い込み力と釣り合わせるためpitchだけちょっと後ろに傾ける
+		pitch_pid = {20.0f, 5.0f, 0.1f, 0.0f, 0.0f, 0.05f};
+		roll_pid = {10.0f, 2.0f, 0.1f, 0.0f, 0.0f, 0.0f};
 		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0f};
 	}
 
@@ -115,10 +117,6 @@ public:
 	dspm::Mat ga = dspm::Mat(3, 1);
 	dspm::Mat tangential = dspm::Mat(3, 1);
 	dspm::Mat skewM = dspm::Mat(3, 3);
-	dspm::Mat q_plus = dspm::Mat(4,1);
-	dspm::Mat q_minus = dspm::Mat(4,1);
-	dspm::Mat r_plus = dspm::Mat(3,1);
-	dspm::Mat r_minus = dspm::Mat(3,1);
 	dspm::Mat Phi = dspm::Mat(6, 6);
 	dspm::Mat temp = dspm::Mat(6, 6);
 	dspm::Mat F = dspm::Mat(6, 6);

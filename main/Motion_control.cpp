@@ -214,9 +214,9 @@ void Motion_control::calcU(){
 	else if (ControlMethod == 2) {
 		// PID制御を適用
 		float xsrc[3];
-		xsrc[0] = calculatePID(pitch_pid, PRY_value[0]);
-		xsrc[1] = calculatePID(roll_pid, PRY_value[1]);
-		xsrc[2] = calculatePID(yaw_pid, PRY_value[2]);
+		xsrc[0] = pitch_pid.calculatePID(PRY_value[0], dt);
+		xsrc[1] = roll_pid.calculatePID(PRY_value[1], dt);
+		xsrc[2] = yaw_pid.calculatePID(PRY_value[2], dt);
 
     	// 制御出力を使用して次の処理を実行
     	u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
@@ -235,14 +235,14 @@ void Motion_control::calcU(){
 }
 
 // PID制御計算関数
-float Motion_control::calculatePID(PID &pid, float current) {
-    float error = pid.target - current; // 誤差
-    pid.integral += error * dt;     // 積分項
-    float derivative = (error - pid.prev_error) / dt; // 微分項
-    pid.prev_error = error;         // 前回の誤差を更新
+float PID::calculatePID(float current, float dt) {
+    float error = target - current; // 誤差
+    integral += error * dt;     // 積分項
+    float derivative = (error - prev_error) / dt; // 微分項
+    prev_error = error;         // 前回の誤差を更新
 
     // PID制御出力
-    return pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
+    return Kp * error + Ki * integral + Kd * derivative;
 }
 
 // PRY値を取得する関数単位はrad
