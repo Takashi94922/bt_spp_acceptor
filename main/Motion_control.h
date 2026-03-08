@@ -73,18 +73,19 @@ public:
 		};
 		KC = dspm::Mat(KCsrc, 5, 6);
 
+		//{pitch roll yaw}
 		float KPIDsrc[] = {
 			0,0,0,
+			1, 1, 0,
+			-1, 1, 0,
 			-1, -1, 0,
-			1,-1, 0,
-			1,1, 0,
-			-1, 1, 0,	
+			1, -1, 0,	
 		};
 		KPID = dspm::Mat(KPIDsrc, 5, 3);
 
 		// PID制御用のインスタンス
 		//吸い込み力と釣り合わせるためpitchだけちょっと後ろに傾ける
-		pitch_pid = {20.0f, 5.0f, 0.1f, 0.0f, 0.0f, 0.05f};
+		pitch_pid = {12.0f, 3.0f, 0.1f, 0.0f, 0.0f, 0.05f};
 		roll_pid = {10.0f, 2.0f, 0.1f, 0.0f, 0.0f, 0.0f};
 		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0f};
 	}
