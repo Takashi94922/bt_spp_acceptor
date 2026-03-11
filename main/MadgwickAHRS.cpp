@@ -246,19 +246,21 @@ float Madgwick::invSqrt(float x) {
 }
 
 //-------------------------------------------------------------------------------------------
-
+//IMU姿勢角をIMU座標系で格納
 void Madgwick::computeAngles()
 {
-	roll = atan2f(q0*q1 + q2*q3, 0.5f - q1*q1 - q2*q2);
-	pitch = asinf(-2.0f * (q1*q3 - q0*q2));
-	yaw = atan2f(q1*q2 + q0*q3, 0.5f - q2*q2 - q3*q3);
+	// --- IMU座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
+    // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
+	roll = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
+	pitch = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
+	yaw = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
 	anglesComputed = 1;
 }
 
-//直接機体座標系に変換する return: roll pitch yawの順でrvに格納
+//IMU姿勢角を return: roll pitch yawの順でrvに格納
 void Madgwick::retBodyAngles(float *rv)
 {
-    // --- 機体座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
+    // --- IMU座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
     // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
     //roll
 	rv[0]  = atan2f(2.0f * (qb0*qb1 + qb2*qb3), 1.0f - 2.0f * (qb1*qb1 + qb2*qb2));

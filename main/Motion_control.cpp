@@ -245,22 +245,11 @@ float PID::calculatePID(float current, float dt) {
 
 // PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
-	//まずIMU座標系から機体座標系の姿勢角を取得する
-	/*
-	retbuf[0] = -madgwick.getPitchRadians();
-	retbuf[1] = -madgwick.getRollRadians();
-	retbuf[2] = -madgwick.getYawRadians();
-	*/
-
-	//IMU座標系での回転量を入手roll pitch yawの順
-	float rot_IMU[3];
-	madgwick.retBodyAngles(rot_IMU);
-	
-	//IMU座標系から機体座標系への変換
-	//rvは pitch roll yawの順で格納される
-	retbuf[0] = -rot_IMU[0];
-	retbuf[1] = -rot_IMU[2];
-	retbuf[2] = rot_IMU[1];
+	//IMU座標系から機体座標系の姿勢角を取得する
+	//retbufの順番は pitch roll yaw
+	retbuf[0] = -madgwick.getRollRadians();
+	retbuf[1] = -madgwick.getYawRadians();
+	retbuf[2] = madgwick.getPitchRadians();
 }
 
 void Motion_control::calib(){

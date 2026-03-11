@@ -76,10 +76,10 @@ public:
 		//{pitch roll yaw}
 		float KPIDsrc[] = {
 			0,0,0,
-			-1, -1, 0,
-			1, -1, 0,
 			1, 1, 0,
-			-1, 1, 0,	
+			-1, 1, 0,
+			-1, -1, 0,
+			1, -1, 0,	
 		};
 		KPID = dspm::Mat(KPIDsrc, 5, 3);
 
