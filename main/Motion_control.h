@@ -125,6 +125,7 @@ public:
 	dspm::Mat K = dspm::Mat(6, 3);
 	//単位はrad
 	float PRY_value[3] = {0};
+	float PRY_offset[3] = {0};  // 初期角度オフセット
 	dspm::Mat B, Q, R, KC, KPID;
 	float *KCsrc = KC.data;
 	dspm::Mat P = dspm::Mat::eye(6);

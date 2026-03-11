@@ -43,10 +43,14 @@ public:
     qb0, qb1, qb2, qb3;
     float wx, wy, wz;
     //IMUの取り付け角度に対するクオータニオン
-    static constexpr float imw = 0.5f;
+/*     static constexpr float imw = 0.5f;
 	static constexpr float imx = -0.5f;
 	static constexpr float imy = -0.5f;
-	static constexpr float imz = -0.5f;
+	static constexpr float imz = -0.5f; */
+    static constexpr float imw = 1.0f; 
+    static constexpr float imx = 0.0f; 
+    static constexpr float imy = 0.0f;
+    static constexpr float imz = 0.0f;
 
     Madgwick();
     void begin(float sampleFrequency) { invSampleFreq = 1.0f / sampleFrequency; }

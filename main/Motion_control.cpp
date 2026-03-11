@@ -22,6 +22,7 @@ void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle)
     }
 	//dt =  1.0f / sampleFreq; //sampleFreqはHzなので、dtは秒
 	madgwick.begin(sampleFreq);
+	//correctInitValue(10);
 }
 
 void Motion_control::Sensor2Body(){
@@ -37,9 +38,9 @@ void Motion_control::Sensor2Body(){
 	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
 	g = IMU_2_body * g_imu;
 
-	m_imu(0, 0) = -imu.calcMag(imu.mx - m0[0]) * 0.00014f;
-	m_imu(1, 0) = -imu.calcMag(imu.my - m0[1]) * 0.00014f;
-	m_imu(2, 0) = imu.calcMag(imu.mz - m0[2]) * 0.00014f; // gauss/LSB
+	m_imu(0, 0) = -imu.calcMag(imu.mx) * 0.00014f;
+	m_imu(1, 0) = -imu.calcMag(imu.my) * 0.00014f;
+	m_imu(2, 0) = imu.calcMag(imu.mz) * 0.00014f; // gauss/LSB
 	m = IMU_2_body * m_imu;
 
 	skew(g);
@@ -181,7 +182,7 @@ void Motion_control::update(){
 	//※LSM9DS1のg/aは左手系でmは右手系
 	madgwick.update(imu.calcGyro(imu.gx), -imu.calcGyro(imu.gy), imu.calcGyro(imu.gz),
 				imu.calcAccel(imu.ax), -imu.calcAccel(imu.ay), imu.calcAccel(imu.az),
-				-imu.calcMag(imu.mx - m0[0]), -imu.calcMag(imu.my - m0[1]), imu.calcMag(imu.mz - m0[2]));
+				-imu.calcMag(imu.mx), -imu.calcMag(imu.my), imu.calcMag(imu.mz));
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
@@ -247,9 +248,9 @@ float PID::calculatePID(float current, float dt) {
 void Motion_control::getPRY(float* retbuf){
 	//IMU座標系から機体座標系の姿勢角を取得する
 	//retbufの順番は pitch roll yaw
-	retbuf[0] = -madgwick.getRollRadians();
-	retbuf[1] = -madgwick.getYawRadians();
-	retbuf[2] = madgwick.getPitchRadians();
+	retbuf[0] = -(madgwick.getRollRadians() - 1.5707963267f); // pitch
+	retbuf[1] =  (madgwick.getPitchRadians() - PRY_offset[1]); // roll
+	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
 }
 
 void Motion_control::calib(){
@@ -259,7 +260,6 @@ void Motion_control::calib(){
 void Motion_control::correctInitValue(uint16_t num_loop){
 	ESP_LOGI(TAG, "calibrate START");
 	//ジャイロセンサの初期値を取得
-    //whileループで平均をとる
  	for (uint8_t i = 0; i < 3; i++)
 	{
 		g0[i] = 0;
@@ -278,11 +278,14 @@ void Motion_control::correctInitValue(uint16_t num_loop){
 			a0[i] += imu.ax;
 			m0[i] += imu.mx;
 		}
+
 	}
+
 	for (uint8_t i = 0; i<3; i++){
 		g0[i] = g0[i]/num_loop;
 		a0[i] = a0[i]/num_loop;
 		m0[i] = m0[i]/num_loop;	
 	}
+
 	ESP_LOGI(TAG, "calibrate FINISH");
 }

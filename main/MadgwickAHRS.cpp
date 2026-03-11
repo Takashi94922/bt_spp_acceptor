@@ -260,15 +260,10 @@ void Madgwick::computeAngles()
 //IMU姿勢角を return: roll pitch yawの順でrvに格納
 void Madgwick::retBodyAngles(float *rv)
 {
-    // --- IMU座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
-    // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
-    //roll
-	rv[0]  = atan2f(2.0f * (qb0*qb1 + qb2*qb3), 1.0f - 2.0f * (qb1*qb1 + qb2*qb2));
-    //pitch
-	rv[1] = asinf(2.0f * (qb0*qb2 - qb3*qb1));
-    //yaw
-	rv[2] = atan2f(2.0f * (qb0*qb3 + qb1*qb2), 1.0f - 2.0f * (qb2*qb2 + qb3*qb3));
-    anglesComputed = 1;
+    if(!anglesComputed)computeAngles();
+	rv[0] = roll;
+	rv[1] = pitch;
+	rv[2] = yaw;
 }
 void Madgwick::calcW(){
 	wx = 2.0 *(qDot1 * q3 + qDot2 * q2 - qDot3 * q1 - qDot4 * q0);
