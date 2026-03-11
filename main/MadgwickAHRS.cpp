@@ -255,17 +255,17 @@ void Madgwick::computeAngles()
 	anglesComputed = 1;
 }
 
-//直接機体座標系に変換する
+//直接機体座標系に変換する return: roll pitch yawの順でrvに格納
 void Madgwick::retBodyAngles(float *rv)
 {
-    // --- 3) 機体座標系クォータニオンから Roll/Pitch/Yaw を計算（ZYX） ---
-    pitch = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
-    yaw = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
-    roll   = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
-
-	rv[0] = pitch;
-	rv[1] = roll;
-	rv[2] = yaw;
+    // --- 機体座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
+    // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
+    //roll
+	rv[0]  = atan2f(2.0f * (qb0*qb1 + qb2*qb3), 1.0f - 2.0f * (qb1*qb1 + qb2*qb2));
+    //pitch
+	rv[1] = asinf(2.0f * (qb0*qb2 - qb3*qb1));
+    //yaw
+	rv[2] = atan2f(2.0f * (qb0*qb3 + qb1*qb2), 1.0f - 2.0f * (qb2*qb2 + qb3*qb3));
     anglesComputed = 1;
 }
 void Madgwick::calcW(){

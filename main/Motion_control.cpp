@@ -220,17 +220,15 @@ void Motion_control::calcU(){
 
     	// 制御出力を使用して次の処理を実行
     	u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
+		
+		// u(1,0)～u(4,0)を50～100の範囲にクランプ
+		for (uint8_t i = 1; i < 5; i++) {
+			if (u(i, 0) < 50.0f) u(i, 0) = 50.0f;
+			if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
+		}
 	}
 	else if(ControlMethod == 3){
-		//padの象限によって制御対象を変える
-		float c45 = 0.70710678f;
-		float dx = KPID(1, 0)*PRY_value[1];
-		float dy = KPID(0, 0)*PRY_value[0];
-		float dz = KPID(3, 0)*PRY_value[3];
-		u(1, 0) = c45 * dx + c45 * dy < 0 ? 0 : (c45 * dx + c45 * dy) * 50;
-		u(2, 0) = c45 * dx - c45 * dy < 0 ? 0 : (c45 * dx - c45 * dy) * 50;
-		u(3, 0) = -c45 * dx - c45 * dy < 0 ? 0 : (-c45 * dx - c45 * dy) * 50;
-		u(4, 0) = -c45 * dx + c45 * dy < 0 ? 0 : (-c45 * dx + c45 * dy) * 50;
+		//future reserved
 	}
 }
 
@@ -254,8 +252,15 @@ void Motion_control::getPRY(float* retbuf){
 	retbuf[2] = -madgwick.getYawRadians();
 	*/
 
-	//一気に機体座標系での回転量を入手pitch roll yawです
-	madgwick.retBodyAngles(retbuf);
+	//IMU座標系での回転量を入手roll pitch yawの順
+	float rot_IMU[3];
+	madgwick.retBodyAngles(rot_IMU);
+	
+	//IMU座標系から機体座標系への変換
+	//rvは pitch roll yawの順で格納される
+	retbuf[0] = -rot_IMU[0];
+	retbuf[1] = -rot_IMU[2];
+	retbuf[2] = rot_IMU[1];
 }
 
 void Motion_control::calib(){

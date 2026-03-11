@@ -118,88 +118,62 @@ void IRAM_ATTR timerKF_callback(TimerHandle_t xTimer)
 }
 
 
-static void command_cb(uint8_t *msg, uint16_t msglen){
-    char SPPmsg[64] = "";
-    ESP_LOG_BUFFER_HEX(TAG, msg, msglen);
-    if (msglen < 2) return; // コマンド＋float未満は無視
-    switch (msg[0])
-    {
-    case 0:
-        ESP_ERROR_CHECK(Thrust->setPWM((float)msg[1]));   
-        break;
-    case 1:
-        ESP_ERROR_CHECK(Servo1->setPWM((float)msg[1]));
-        break;
-    case 2:
-        ESP_ERROR_CHECK(Servo2->setPWM((float)msg[1]));
-        break;
-    case 3:
-        ESP_ERROR_CHECK(Servo3->setPWM((float)msg[1]));
-        break;
-    case 4:
-        ESP_ERROR_CHECK(Servo4->setPWM((float)msg[1]));
-        break;
-    case 5:
-        motion.ControlMethod = msg[1];
-        break;
-    case 10:
-        //Servoの一括設定
-        uint8_t valServo[4];
-        memcpy(valServo, &msg[1], sizeof(uint8_t)*4);
-        ESP_ERROR_CHECK(Servo1->setPWM((float)valServo[0]));
-        ESP_ERROR_CHECK(Servo2->setPWM((float)valServo[1]));
-        ESP_ERROR_CHECK(Servo3->setPWM((float)valServo[2]));
-        ESP_ERROR_CHECK(Servo4->setPWM((float)valServo[3]));
-        break;
-    case 11:
-        //pitch PID
-        if(msg[1] == 0){
-            memcpy(&motion.pitch_pid.Kp, &msg[2], sizeof(float));
-        }else if(msg[1] == 1){
-            memcpy(&motion.pitch_pid.Ki, &msg[2], sizeof(float));
-        }else if(msg[1] == 2){
-            memcpy(&motion.pitch_pid.Kd, &msg[2], sizeof(float));
-        }
-        break;
-    case 12:
-        //roll PID
-        if(msg[1] == 0){
-            memcpy(&motion.roll_pid.Kp, &msg[2], sizeof(float));
-        }else if(msg[1] == 1){
-            memcpy(&motion.roll_pid.Ki, &msg[2], sizeof(float));
-        }else if(msg[1] == 2){
-            memcpy(&motion.roll_pid.Kd, &msg[2], sizeof(float));
-        }
-        break;
-    case 13:
-        //pitch PID
-        if(msg[1] == 0){
-            memcpy(&motion.yaw_pid.Kp, &msg[2], sizeof(float));
-        }else if(msg[1] == 1){
-            memcpy(&motion.yaw_pid.Ki, &msg[2], sizeof(float));
-        }else if(msg[1] == 2){
-            memcpy(&motion.yaw_pid.Kd, &msg[2], sizeof(float));
-        }
-        break;
-    default:
-        //7=9はKCの設定
-        if (msg[0] > 6 && msg[0] < 10 && msglen > 1+sizeof(float)*6){
-            //KCの設定
-            ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
-            memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
-            ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
-        }else {
-            ESP_LOGI(TAG, "Unknow command Recieved.");
-            sprintf(SPPmsg, "tUnknow command Recieved.");
-            //もしBlueToothがつながってたら送信する
-            if (bl_comm.isClientConnecting()) {
-                ESP_LOGI(TAG, "MSG Write to SPP.");
-                ESP_LOGI(TAG, "%s", (uint8_t*)SPPmsg);
+// 単一Servo設定関数
+static void set_servo_pwm(uint8_t servo_id, float pwm) {
+    Motor* servos[] = {Thrust, Servo1, Servo2, Servo3, Servo4};
+    if (servo_id < 5) {
+        ESP_ERROR_CHECK(servos[servo_id]->setPWM(pwm));
+    }
+}
 
-                bl_comm.sendMsg(SPPmsg, strlen(SPPmsg));
+// PID設定関数
+static void set_pid_gain(void* pid_ptr, uint8_t gain_type, const float* value) {
+    switch(gain_type) {
+        case 0: memcpy(&((PID*)pid_ptr)->Kp, value, sizeof(float)); break;
+        case 1: memcpy(&((PID*)pid_ptr)->Ki, value, sizeof(float)); break;
+        case 2: memcpy(&((PID*)pid_ptr)->Kd, value, sizeof(float)); break;
+    }
+}
+
+static void command_cb(uint8_t *msg, uint16_t msglen){
+    if (msglen < 2) return;
+    ESP_LOG_BUFFER_HEX(TAG, msg, msglen);
+    
+    switch (msg[0]) {
+        case 0 ... 4:
+            set_servo_pwm(msg[0], (float)msg[1]);
+            break;
+        case 5:
+            motion.ControlMethod = msg[1];
+            break;
+        case 10: {
+            uint8_t valServo[4];
+            memcpy(valServo, &msg[1], sizeof(uint8_t)*4);
+            for(int i = 0; i < 4; i++) {
+                set_servo_pwm(i+1, (float)valServo[i]);
             }
+            break;
         }
-        break;
+        case 11:
+            if(msglen >= 6) set_pid_gain(&motion.pitch_pid, msg[1], (float*)&msg[2]);
+            break;
+        case 12:
+            if(msglen >= 6) set_pid_gain(&motion.roll_pid, msg[1], (float*)&msg[2]);
+            break;
+        case 13:
+            if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], (float*)&msg[2]);
+            break;
+        default:
+            if (msg[0] > 6 && msg[0] < 10 && msglen > 1+sizeof(float)*6) {
+                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
+                memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
+                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
+            } else {
+                ESP_LOGI(TAG, "Unknown command.");
+                if (bl_comm.isClientConnecting()) {
+                    bl_comm.sendMsg("Unknown command.", 15);
+                }
+            }
     }
 }
 
@@ -224,10 +198,17 @@ static void i2c_master_init(float sampleFreq)
     //motion.correctInitValue(100);
 }
 
+// Servo生成・初期化関数
+static void init_servo(Motor** servo_ptr, gpio_num_t gpio, mcpwm_oper_handle_t oper, 
+                       int min_us, int max_us, float center_pulse) {
+    *servo_ptr = new Motor(gpio, oper, min_us, max_us);
+    (*servo_ptr)->setCenterPulse(center_pulse);
+    (*servo_ptr)->begin();
+    (*servo_ptr)->setPWM(50);
+}
+
 static void pwm_init(){
-    //モーターのタスク優先度　最優先
     ESP_LOGI(TAG, "Create timer and operator");
-    mcpwm_timer_handle_t timer = NULL;
     mcpwm_timer_config_t timer_config = {
         .group_id = 0,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
@@ -236,53 +217,52 @@ static void pwm_init(){
         .period_ticks = SERVO_TIMEBASE_PERIOD,
         .intr_priority = 2,
     };
+    mcpwm_timer_handle_t timer = NULL;
     ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &timer));
 
-    mcpwm_oper_handle_t oper = NULL;
-    mcpwm_operator_config_t operator_config = {
-        .group_id = 0, // operator must be in the same group to the timer
-    };
+    mcpwm_operator_config_t operator_config = {.group_id = 0};
+    mcpwm_oper_handle_t oper = NULL, operServo = NULL, operServo2 = NULL;
     ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &oper));
     ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper, timer));
+    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &operServo));
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(operServo, timer));
+    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &operServo2));
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(operServo2, timer));
     ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
     ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
 
     Thrust = new Motor(GPIO_NUM_21, oper, 1000, 2000);
     Thrust->begin();
-    ESP_LOGI(TAG, "Motor Breaking ...");
     Thrust->setPWM(0);
 
-    //servo
-    mcpwm_oper_handle_t operServo = NULL;
-    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &operServo));
-    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(operServo, timer));
+    init_servo(&Servo1, GPIO_NUM_4, operServo, 900, 2100, 44.0f);
+    init_servo(&Servo2, GPIO_NUM_16, operServo, 900, 2100, 56.0f);
+    init_servo(&Servo3, GPIO_NUM_22, operServo2, 900, 2100, 56.0f);
+    init_servo(&Servo4, GPIO_NUM_17, operServo2, 900, 2100, 44.0f);
 
-    //comparaterが足りないのでoperatorを追加
-    mcpwm_oper_handle_t operServo2 = NULL;
-    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &operServo2));
-    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(operServo2, timer));
-
-    Servo1 = new Motor(GPIO_NUM_4, operServo, 900, 2100);
-    Servo1->setCenterPulse(44.0f); 
-    Servo2 = new Motor(GPIO_NUM_16, operServo, 900, 2100);
-    Servo2->setCenterPulse(56.0f);
-    Servo3 = new Motor(GPIO_NUM_22, operServo2, 900, 2100);
-    Servo3->setCenterPulse(56.0f);
-    Servo4 = new Motor(GPIO_NUM_17, operServo2, 900, 2100);
-    Servo4->setCenterPulse(44.0f);
-
-    if(Thrust == NULL || Servo1 == NULL || Servo2 == NULL || Servo3 == NULL || Servo4 == NULL){
+    if(Thrust == NULL || Servo1 == NULL || Servo2 == NULL || Servo3 == NULL || Servo4 == NULL) {
         ESP_LOGE(TAG, "Motor or Servo creation failed");
-        return;
     }
-    Servo1->begin();
-    Servo2->begin();
-    Servo3->begin();
-    Servo4->begin();
-    Servo1->setPWM(50);
-    Servo2->setPWM(50);
-    Servo3->setPWM(50);
-    Servo4->setPWM(50);
+}
+
+// タイマー生成と開始を一括で行う関数を追加
+TimerHandle_t create_and_start_timer(const char* timer_name, int period_ms, 
+                                      TimerCallbackFunction_t callback_func, int timer_id = 0)
+{
+    TimerHandle_t timer = xTimerCreate(timer_name, pdMS_TO_TICKS(period_ms), pdTRUE, 
+                                       (void*)(intptr_t)timer_id, callback_func);
+    if (timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create %s.", timer_name);
+        return NULL;
+    }
+
+    if (xTimerStart(timer, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start %s.", timer_name);
+        return NULL;
+    }
+
+    ESP_LOGI(TAG, "%s started successfully.", timer_name);
+    return timer;
 }
 
 extern "C" void app_main(void)
@@ -299,65 +279,22 @@ extern "C" void app_main(void)
     bl_comm.setCommandCb(command_cb);
     ESP_ERROR_CHECK(bl_comm.begin());
 
-    ESP_LOGI(TAG, "Create IMU");
     const int IMU_sampling_ms = 4;
     i2c_master_init(1000/IMU_sampling_ms);
     // タイマーを作成し、コールバック関数を設定します。
-    TimerHandle_t timer = xTimerCreate("IMU Timer", pdMS_TO_TICKS(IMU_sampling_ms), pdTRUE, (void *) 1, timer_callback);
-    if (timer == NULL) {
-        ESP_LOGE(TAG, "Failed to create timer.");
-        return;
-    }
+    TimerHandle_t timer = create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
 
-    // タイマーを開始します。
-    if (xTimerStart(timer, 0) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start timer.");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Create CalcU Timer");
     const int CalcU_sampling_ms = 100;
-    TimerHandle_t timerU = xTimerCreate("CalcU Timer", pdMS_TO_TICKS(CalcU_sampling_ms), pdTRUE, (void *) 1, timerU_callback);
-    if (timer == NULL) {
-        ESP_LOGE(TAG, "Failed to create timer.");
-        return;
-    }
-
-    // タイマーを開始します。
-    if (xTimerStart(timerU, 0) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start timer.");
-        return;
-    }
+    TimerHandle_t timerU = create_and_start_timer("CalcU Timer", CalcU_sampling_ms, timerU_callback, 1);
 
     //kalman filter用たいまー
-    ESP_LOGI(TAG, "Create KF Timer");
     const int CalcKF_sampling_ms = 10;
-    TimerHandle_t timerKF = xTimerCreate("CalcKF Timer", pdMS_TO_TICKS(CalcKF_sampling_ms), pdTRUE, (void *) 1, timerKF_callback);
-    if (timer == NULL) {
-        ESP_LOGE(TAG, "Failed to create timer.");
-        return;
-    }
-
-    // タイマーを開始します。
-    if (xTimerStart(timerKF, 0) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start timer.");
-        return;
-    }
-
+    TimerHandle_t timerKF = create_and_start_timer("CalcKF Timer", CalcKF_sampling_ms, timerKF_callback, 1);
 
     // 新たなタイマーを作成し、コールバック関数を設定します。
-    TimerHandle_t bl_telemetry = xTimerCreate("BL Telemetry", pdMS_TO_TICKS(200), pdTRUE, (void *) 2, bl_telemetry_callback);
-    if (bl_telemetry == NULL) {
-        ESP_LOGE(TAG, "Failed to create new timer.");
-        return;
-    }
-
-    // 新たなタイマーを開始します。
-    if (xTimerStart(bl_telemetry, 0) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start new timer.");
-        return;
-    }
+    TimerHandle_t bl_telemetry = create_and_start_timer("BL Telemetry", 200, bl_telemetry_callback, 2);
 
     // タスクをブロックします。
     vTaskDelay(portMAX_DELAY);
 }
+
