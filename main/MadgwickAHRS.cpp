@@ -144,13 +144,14 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay, float az
 	q2 *= recipNorm;
 	q3 *= recipNorm;
 
+	/*
 	//body座標への変換
 	// --- 2) q_body = q_mount * q_imu ---
     qb0 = imw*q0 - imx*q1 - imy*q2 - imz*q3;
     qb1 = imw*q1 + imx*q0 + imy*q3 - imz*q2;
     qb2 = imw*q2 - imx*q3 + imy*q0 + imz*q1;
     qb3 = imw*q3 + imx*q2 - imy*q1 + imz*q0;
-
+	*/
 	anglesComputed = 0;
 }
 
@@ -251,9 +252,14 @@ void Madgwick::computeAngles()
 {
 	// --- IMU座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
     // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
+	/*
 	roll = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
 	pitch = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
 	yaw = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
+	*/
+	roll = atan2f(q0*q1 + q2*q3, 0.5f - q1*q1 - q2*q2);
+	pitch = asinf(-2.0f * (q1*q3 - q0*q2));
+	yaw = atan2f(q1*q2 + q0*q3, 0.5f - q2*q2 - q3*q3);
 	anglesComputed = 1;
 }
 
