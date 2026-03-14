@@ -58,6 +58,21 @@ void Motion_control::Sensor2Body(){
 	g_prev = g;
 }
 void Motion_control::filterUpdate(){
+	//imu->機体座標の変換＋向心力の補正
+	Sensor2Body();
+
+	//姿勢から重力の分力を減算
+	//地球からbody座標に変換
+	float gv_imusrc[3];
+	madgwick.trans2body(gv_imusrc, gv);
+	a_grav(0, 0) = gv_imusrc[0];
+	a_grav(1, 0) = gv_imusrc[1];
+	a_grav(2, 0) = gv_imusrc[2];
+	//imuから機体に変換
+	//a_grav = IMU_2_body * gv_imu;
+	//重力加速度を引く
+	a = a - a_grav;
+
 	//ESP_LOGD(TAG, "kalman Start");
 	//x = F*x + B*u + Q
 	//y = H*x
@@ -190,23 +205,6 @@ void Motion_control::update(){
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
-
-	//imu->機体座標の変換＋向心力の補正
-	Sensor2Body();
-
-	//姿勢から重力の分力を減算
-	//地球からbody座標に変換
-	float gv_imusrc[3];
-	madgwick.trans2body(gv_imusrc, gv);
-	a_grav(0, 0) = gv_imusrc[0];
-	a_grav(1, 0) = gv_imusrc[1];
-	a_grav(2, 0) = gv_imusrc[2];
-	//imuから機体に変換
-	//a_grav = IMU_2_body * gv_imu;
-	//重力加速度を引く
-	a = a - a_grav;
-
-	//filtaUpdate();
 
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));

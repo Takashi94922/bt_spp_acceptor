@@ -114,7 +114,7 @@ void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
 void IRAM_ATTR timerKF_callback(TimerHandle_t xTimer)
 {
     //ESP_LOGI("Timer", "calculating.. u");
-    motion.filterUpdate();
+    //motion.filterUpdate();
 }
 
 
@@ -279,8 +279,8 @@ extern "C" void app_main(void)
     bl_comm.setCommandCb(command_cb);
     ESP_ERROR_CHECK(bl_comm.begin());
 
-    const int IMU_sampling_ms = 4;
-    const int CalcU_sampling_ms = 100;
+    const int IMU_sampling_ms = 2;
+    const int CalcU_sampling_ms = 4;
     i2c_master_init(1000/IMU_sampling_ms, 1000/CalcU_sampling_ms);
     // タイマーを作成し、コールバック関数を設定します。
     TimerHandle_t timer = create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
