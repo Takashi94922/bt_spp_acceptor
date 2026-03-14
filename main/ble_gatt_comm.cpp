@@ -123,6 +123,12 @@ Ble_comm::Ble_comm(float *xhat_value_p,float *PRY_value_p, float *controlU_p, fl
     Ble_comm::PRY_value = PRY_value_p;
     Ble_comm::q = q_p;
 
+    Ble_comm::gatt_db[IDX_CHAR_VAL_A].att_desc.value = (uint8_t *)xhat_value;
+    Ble_comm::gatt_db[IDX_CHAR_VAL_B].att_desc.value = (uint8_t *)PRY_value;
+    Ble_comm::gatt_db[IDX_CHAR_VAL_C].att_desc.value = (uint8_t *)controlU;
+    Ble_comm::gatt_db[IDX_CHAR_VAL_D].att_desc.value = (uint8_t *)controlGain;
+    Ble_comm::gatt_db[IDX_CHAR_VAL_F].att_desc.value = (uint8_t *)q;
+
     Ble_comm::notify_targets[0].value_ptr = (uint8_t *)xhat_value;
     Ble_comm::notify_targets[1].value_ptr = (uint8_t *)PRY_value;
     Ble_comm::notify_targets[2].value_ptr = (uint8_t *)controlU;
