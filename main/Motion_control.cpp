@@ -16,11 +16,15 @@ void Motion_control::skew( dspm::Mat &v )
 	skewM(2,0) = -v(1,0);    skewM(2,1) =  v(0,0);  skewM(2,2) =  0;
 }
 
-void Motion_control::begin(float sampleFreq, i2c_master_bus_handle_t bus_handle){
+void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_handle_t bus_handle){
  	if(imu.begin(LSM9DS1_AG_ADDR(0), LSM9DS1_M_ADDR(0), bus_handle) == 0){
         ESP_LOGE(TAG, "imu initialize faile");
     }
-	//dt =  1.0f / sampleFreq; //sampleFreqはHzなので、dtは秒
+	dt_imu = 1.0f / sampleFreq;
+	dt_cont = 1.0f / Control_freq;
+	pitch_pid.dt_cont = dt_cont;
+	roll_pid.dt_cont = dt_cont;
+	yaw_pid.dt_cont = dt_cont;
 	madgwick.begin(sampleFreq);
 	//correctInitValue(10);
 }
@@ -46,10 +50,10 @@ void Motion_control::Sensor2Body(){
 	skew(g);
 	centripetal = skewM * (skewM * x_IMU);
 
-	ga = ((g - g_prev) * (1.0f /dt));
+	ga = ((g - g_prev) * (1.0f /dt_imu));
     skew(ga);
 	tangential = skewM * x_IMU;
-	a = a - centripetal - tangential; //重心の座標系に変換
+	//a = a - centripetal - tangential; //重心の座標系に変換
 
 	g_prev = g;
 }
@@ -84,13 +88,13 @@ void Motion_control::filterUpdate(){
     float pz = xhat(5,0);
 
     // 4) 予測更新
-    vx += acc_world(0,0) * dt;
-    vy += acc_world(1,0) * dt;
-    vz += acc_world(2,0) * dt;
+    vx += acc_world(0,0) * dt_imu;
+    vy += acc_world(1,0) * dt_imu;
+    vz += acc_world(2,0) * dt_imu;
 
-    px += vx * dt + 0.5f * acc_world(0,0) * dt * dt;
-    py += vy * dt + 0.5f * acc_world(1,0) * dt * dt;
-    pz += vz * dt + 0.5f * acc_world(2,0) * dt * dt;
+    px += vx * dt_imu + 0.5f * acc_world(0,0) * dt_imu * dt_imu;
+    py += vy * dt_imu + 0.5f * acc_world(1,0) * dt_imu * dt_imu;
+    pz += vz * dt_imu + 0.5f * acc_world(2,0) * dt_imu * dt_imu;
 
     xhat(0,0) = vx;
     xhat(1,0) = vy;
@@ -109,7 +113,7 @@ void Motion_control::filterUpdate(){
 	
 	//phi = I + F dt
 	Phi = dspm::Mat::eye(6);
-	Phi += F * dt;
+	Phi += F * dt_imu;
 
 	// --- P = Φ P Φᵀ + Q ---
 	// temp = Φ * P
@@ -215,9 +219,9 @@ void Motion_control::calcU(){
 	else if (ControlMethod == 2) {
 		// PID制御を適用
 		float xsrc[3];
-		xsrc[0] = pitch_pid.calculatePID(PRY_value[0], dt);
-		xsrc[1] = roll_pid.calculatePID(PRY_value[1], dt);
-		xsrc[2] = yaw_pid.calculatePID(PRY_value[2], dt);
+		xsrc[0] = pitch_pid.calculatePID(PRY_value[0]);
+		xsrc[1] = roll_pid.calculatePID(PRY_value[1]);
+		xsrc[2] = yaw_pid.calculatePID(PRY_value[2]);
 
     	// 制御出力を使用して次の処理を実行
     	u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
@@ -234,10 +238,10 @@ void Motion_control::calcU(){
 }
 
 // PID制御計算関数
-float PID::calculatePID(float current, float dt) {
+float PID::calculatePID(float current) {
     float error = target - current; // 誤差
-    integral += error * dt;     // 積分項
-    float derivative = (error - prev_error) / dt; // 微分項
+    integral += error * dt_cont;     // 積分項
+    float derivative = (error - prev_error) / dt_cont; // 微分項
     prev_error = error;         // 前回の誤差を更新
 
     // PID制御出力

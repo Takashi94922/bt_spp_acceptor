@@ -7,10 +7,11 @@
 #define TAG "MOTION"
 struct PID {
 	float Kp, Ki, Kd;
+	float dt_cont;
 	float prev_error;
 	float integral;
 	float target = 0; // 目標値（セットポイント）
-	float calculatePID(float current, float dt);
+	float calculatePID(float current);
 };
 class Motion_control{
 	LSM9DS1 imu;
@@ -94,7 +95,9 @@ public:
 	static constexpr float deg2rad = 0.0174533;
 	static constexpr float rad2deg = 1.0/deg2rad;
 	static constexpr float mass = 1.66f;
-	static constexpr float dt = 10E-3;
+	float dt_imu = 10E-3;
+	float dt_cont = 1.0f;
+
 	float gv[3] = {0.0, 0.0, -gravity_c};
 	float a0[3] = {0};
 	float g0[3] = {0};
@@ -135,7 +138,7 @@ public:
 	PID pitch_pid, roll_pid, yaw_pid;
 	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
 
-	void begin(float sampleFreq, i2c_master_bus_handle_t bus_handle);
+	void begin(float sampleFreq, float Control_freq, i2c_master_bus_handle_t bus_handle);
     void skew(dspm::Mat &v );
 	void Sensor2Body();
     void filterUpdate();
@@ -145,6 +148,5 @@ public:
     void getPRY(float *retbuf);
     void calib();
     void correctInitValue(uint16_t num_loop);
-	float calculatePID(PID &pid, float current);
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);
 };

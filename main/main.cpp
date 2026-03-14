@@ -177,7 +177,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
     }
 }
 
-static void i2c_master_init(float sampleFreq)
+static void i2c_master_init(float IMU_sampleFreq, float Cont_freq)
 {
     i2c_master_bus_config_t bus_conf = {
         .i2c_port = -1,
@@ -194,7 +194,7 @@ static void i2c_master_init(float sampleFreq)
 
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_conf, &bus_handle));
 
-    motion.begin(sampleFreq, bus_handle);
+    motion.begin(IMU_sampleFreq, Cont_freq, bus_handle);
     //motion.correctInitValue(100);
 }
 
@@ -280,11 +280,11 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(bl_comm.begin());
 
     const int IMU_sampling_ms = 4;
-    i2c_master_init(1000/IMU_sampling_ms);
+    const int CalcU_sampling_ms = 100;
+    i2c_master_init(1000/IMU_sampling_ms, 1000/CalcU_sampling_ms);
     // タイマーを作成し、コールバック関数を設定します。
     TimerHandle_t timer = create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
 
-    const int CalcU_sampling_ms = 100;
     TimerHandle_t timerU = create_and_start_timer("CalcU Timer", CalcU_sampling_ms, timerU_callback, 1);
 
     //kalman filter用たいまー
