@@ -24,10 +24,6 @@ class Madgwick{
 private:
     static float invSqrt(float x);
     float beta;				// algorithm gain
-    float q0;
-    float q1;
-    float q2;
-    float q3;	// quaternion of sensor frame relative to auxiliary frame
     float invSampleFreq;
     float roll;
     float pitch;
@@ -41,7 +37,9 @@ private:
 public:
     float qDot1, qDot2, qDot3, qDot4,
     qb0, qb1, qb2, qb3;
+    float q0, q1, q2, q3;	// quaternion of sensor frame relative to auxiliary frame
     float wx, wy, wz;
+    
     //IMUの取り付け角度に対するクオータニオン
 /*     static constexpr float imw = 0.5f;
 	static constexpr float imx = -0.5f;

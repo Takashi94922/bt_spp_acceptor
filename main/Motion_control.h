@@ -146,6 +146,7 @@ public:
     void calcU();
 	//単位はrad
     void getPRY(float *retbuf);
+	void getQuaternion(float* retbuf);
     void calib();
     void correctInitValue(uint16_t num_loop);
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);

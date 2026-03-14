@@ -27,7 +27,7 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     /*  Xhat Notify Value */
     [IDX_CHAR_VAL_A] =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Xhat_Telem, ESP_GATT_PERM_READ,
-    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)xhat_value}},
 
     /* Xhat Notify  Client Characteristic Configuration Descriptor */
     [IDX_CHAR_CFG_A]  =
@@ -42,7 +42,7 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     /*PRY Characteristic Value */
     [IDX_CHAR_VAL_B]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_PRY_Telem, ESP_GATT_PERM_READ,
-    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)PRY_value}},
     
     /*PRY Client Characteristic Configuration Descriptor */
     [IDX_CHAR_CFG_B]  =
@@ -57,7 +57,7 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     /*Control U  Characteristic Value */
     [IDX_CHAR_VAL_C]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_contU_TelemWrite, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)controlU}},
 
     /*Control U  Client Characteristic Configuration Descriptor */
     [IDX_CHAR_CFG_C]  =
@@ -69,12 +69,12 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
     CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
 
-    /*Control U  Characteristic Value */
+    /*Control Gain  Characteristic Value */
     [IDX_CHAR_VAL_D]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_ContGain_Upd, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)controlGain}},
 
-    /*Control U  Client Characteristic Configuration Descriptor */
+    /*Control Gain  Client Characteristic Configuration Descriptor */
     [IDX_CHAR_CFG_D]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
     sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
@@ -87,34 +87,70 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     [IDX_CHAR_VAL_E]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Command, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
     GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},  
-};
-notify_target_t Ble_comm::notify_targets[5] = {
-    {0, 0, (uint8_t *)nullptr, sizeof(float)*6, "A"},
-    {0, 0, (uint8_t *)nullptr, sizeof(float)*3, "B"},
-    {0, 0, (uint8_t *)nullptr, (sizeof(float)*5), "C"},
-    {0, 0, (uint8_t *)nullptr, sizeof(float)*5*6, "D"},
-    {0, 0, (uint8_t *)nullptr, sizeof(uint8_t)*2, "E"}
+
+    [IDX_CHAR_CFG_E]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+    sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
+
+    /*Quaternion Characteristic Declaration */
+    [IDX_CHAR_F]      =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
+    CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
+
+    /*Quaternion Characteristic Value */
+    [IDX_CHAR_VAL_F]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Quaternion_Telem, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)q}},
+
+    [IDX_CHAR_CFG_F]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ,
+    sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
 };
 
-Ble_comm::Ble_comm(float *xhat_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p) {
+notify_target_t Ble_comm::notify_targets[6] = {
+    {0, 0, (uint8_t *)xhat_value, sizeof(float)*6, "A"},
+    {0, 0, (uint8_t *)PRY_value, sizeof(float)*3, "B"},
+    {0, 0, (uint8_t *)controlU, sizeof(float)*5, "C"},
+    {0, 0, (uint8_t *)controlGain, sizeof(float)*5*6, "D"},
+    {0, 0, (uint8_t *)nullptr, 0, "E"},
+    {0, 0, (uint8_t *)q, sizeof(float)*4, "F"},
+};
+
+Ble_comm::Ble_comm(float *xhat_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p, float *q_p) {
     Ble_comm::xhat_value = xhat_value_p;
     Ble_comm::controlU = controlU_p;
     Ble_comm::controlGain = controlGain_p;
     Ble_comm::PRY_value = PRY_value_p;
-
-    Ble_comm::gatt_db[IDX_CHAR_VAL_A].att_desc.value = (uint8_t*)xhat_value;
-    Ble_comm::gatt_db[IDX_CHAR_VAL_B].att_desc.value = (uint8_t*)PRY_value;
-    Ble_comm::gatt_db[IDX_CHAR_VAL_C].att_desc.value = (uint8_t*)controlU;
-    Ble_comm::gatt_db[IDX_CHAR_VAL_D].att_desc.value = (uint8_t*)controlGain;
+    Ble_comm::q = q_p;
 
     Ble_comm::notify_targets[0].value_ptr = (uint8_t *)xhat_value;
     Ble_comm::notify_targets[1].value_ptr = (uint8_t *)PRY_value;
     Ble_comm::notify_targets[2].value_ptr = (uint8_t *)controlU;
     Ble_comm::notify_targets[3].value_ptr = (uint8_t *)controlGain;
+    Ble_comm::notify_targets[4].value_ptr = (uint8_t *)nullptr;
+    Ble_comm::notify_targets[5].value_ptr = (uint8_t *)q;
+}
+
+notify_target_t* Ble_comm::getNotifyTargetByCfgHandle(uint16_t cfg_handle) {
+    for (auto &t : Ble_comm::notify_targets) {
+        if (t.cfg_handle == cfg_handle) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+notify_target_t* Ble_comm::getNotifyTargetByValHandle(uint16_t val_handle) {
+    for (auto &t : Ble_comm::notify_targets) {
+        if (t.val_handle == val_handle) {
+            return &t;
+        }
+    }
+    return nullptr;
 }
 
 uint8_t Ble_comm::adv_config_done = 0;
-float *Ble_comm::xhat_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_comm::controlGain;
+float *Ble_comm::xhat_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_comm::controlGain, *Ble_comm::q;
 
 prepare_type_env_t *Ble_comm::env_list[5];
 
@@ -285,46 +321,33 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                 ESP_LOGI(GATTS_TABLE_TAG, "GATT_WRITE_EVT, handle = %d, value len = %d", param->write.handle, param->write.len);
                 ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, param->write.value, param->write.len);
 
-                //CCCD(Notify/Indicate設定)への書き込みかどうかで判定
-                bool is_cccd_write = false;
-                for (int i = 0; i < sizeof(notify_targets)/sizeof(notify_targets[0]); ++i) {
-                    if (param->write.handle == notify_targets[i].cfg_handle) {
-                        is_cccd_write = true;
-                        break;
-                    }
-                }
-
-                if (is_cccd_write) {
-                    // CCCD(Notify/Indicate設定)への書き込み
+                // CCCD(Notify/Indicate設定)への書き込みかどうかを検索
+                notify_target_t *notify_target = Ble_comm::getNotifyTargetByCfgHandle(param->write.handle);
+                if (notify_target) {
                     uint16_t descr_value = param->write.value[1] << 8 | param->write.value[0];
-                    for (int i = 0; i < sizeof(notify_targets)/sizeof(notify_targets[0]); ++i) {
-                        const notify_target_t *t = &notify_targets[i];
-                        if (param->write.handle == t->cfg_handle) {
-                            if (descr_value == 0x0001) {
-                                ESP_LOGI(GATTS_TABLE_TAG, "notify %s enable", t->label);
-                                esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, t->val_handle, t->value_len, t->value_ptr, false);
-                            } else if (descr_value == 0x0002) {
-                                ESP_LOGI(GATTS_TABLE_TAG, "indicate %s enable", t->label);
-                                esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, t->val_handle, t->value_len, t->value_ptr, true);
-                            } else if (descr_value == 0x0000) {
-                                ESP_LOGI(GATTS_TABLE_TAG, "notify/indicate %s disable", t->label);
-                            } else {
-                                ESP_LOGE(GATTS_TABLE_TAG, "unknown descr value for %s", t->label);
-                                ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, param->write.value, param->write.len);
-                            }
-                            break;
-                        }
+                    if (descr_value == 0x0001) {
+                        ESP_LOGI(GATTS_TABLE_TAG, "notify %s enable", notify_target->label);
+                        esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, notify_target->val_handle, notify_target->value_len, notify_target->value_ptr, false);
+                    } else if (descr_value == 0x0002) {
+                        ESP_LOGI(GATTS_TABLE_TAG, "indicate %s enable", notify_target->label);
+                        esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, notify_target->val_handle, notify_target->value_len, notify_target->value_ptr, true);
+                    } else if (descr_value == 0x0000) {
+                        ESP_LOGI(GATTS_TABLE_TAG, "notify/indicate %s disable", notify_target->label);
+                    } else {
+                        ESP_LOGE(GATTS_TABLE_TAG, "unknown descr value for %s", notify_target->label);
+                        ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, param->write.value, param->write.len);
                     }
-                }
-                else {
+                } else {
                     // それ以外のCharacteristic Valueへの書き込み処理
-                    // 書き込まれる変数は Control U, Control Gain, Remote Command のいずれか
-                    if (param->write.handle == notify_targets[2].val_handle) { // Control U
-                        if (param->write.len == sizeof(float) + 1) { // +1は制御信号の変更バイトフラグ
+                    notify_target = Ble_comm::getNotifyTargetByValHandle(param->write.handle);
+                    if (notify_target == nullptr) {
+                        ESP_LOGW(GATTS_TABLE_TAG, "Unknown write handle: 0x%04X", param->write.handle);
+                    } else if (notify_target == &Ble_comm::notify_targets[2]) { // Control U
+                        if (param->write.len == sizeof(float) + 1) {
                             uint8_t index = param->write.value[4];
-                            if (index < 5) { // controlUが5要素の場合
+                            if (index < 5) {
                                 float value;
-                                memcpy(&value, param->write.value, sizeof(float)); // 先頭4バイトをfloatに変換
+                                memcpy(&value, param->write.value, sizeof(float));
                                 Ble_comm::controlU[index] = value;
                                 ESP_LOGI(GATTS_TABLE_TAG, "Control U[%d] updated: %f", index, value);
                             } else {
@@ -333,23 +356,22 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Control U write");
                         }
-                    } else if (param->write.handle == notify_targets[3].val_handle) { // Control Gain
-                        constexpr size_t expected_bytes = sizeof(float) * 5 * 6; // 5要素の制御ゲイン、各要素は6つの値を持つ
+                    } else if (notify_target == &Ble_comm::notify_targets[3]) { // Control Gain
+                        constexpr size_t expected_bytes = sizeof(float) * 5 * 6;
                         if (param->write.len == expected_bytes) {
-                            // raw uint8_t* → float array is safe via memcpy
                             memcpy(Ble_comm::controlGain, param->write.value, expected_bytes);
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Control Gain write: %d", param->write.len);
                         }
-                    } else if (param->write.handle == notify_targets[4].val_handle) { // Remote Command
-                        if (param->write.len > sizeof(uint8_t)) { // 2バイト以上のコマンド
+                    } else if (notify_target == &Ble_comm::notify_targets[4]) { // Remote Command
+                        if (param->write.len > sizeof(uint8_t)) {
                             command_cb(param->write.value, param->write.len);
                             ESP_LOGI(GATTS_TABLE_TAG, "Remote Command updated: %d", param->write.value[0]);
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Remote Command write");
                         }
                     } else {
-                        ESP_LOGW(GATTS_TABLE_TAG, "Unknown write handle: 0x%04X", param->write.handle);
+                        ESP_LOGW(GATTS_TABLE_TAG, "Unhandled value write for notify target %s", notify_target->label);
                     }
                 }
 
@@ -411,17 +433,13 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                         doesn't equal to IDX_NB(%d)", param->add_attr_tab.num_handle, IDX_NB);
             }
             else {
-                ESP_LOGI(GATTS_TABLE_TAG, "create attribute table successfully, the number handle = %d",param->add_attr_tab.num_handle);               
-                notify_targets[0].cfg_handle = param->add_attr_tab.handles[IDX_CHAR_CFG_A];
-                notify_targets[0].val_handle = param->add_attr_tab.handles[IDX_CHAR_VAL_A];
-                notify_targets[1].cfg_handle = param->add_attr_tab.handles[IDX_CHAR_CFG_B];
-                notify_targets[1].val_handle = param->add_attr_tab.handles[IDX_CHAR_VAL_B];
-                notify_targets[2].cfg_handle = param->add_attr_tab.handles[IDX_CHAR_CFG_C];
-                notify_targets[2].val_handle = param->add_attr_tab.handles[IDX_CHAR_VAL_C];
-                notify_targets[3].cfg_handle = param->add_attr_tab.handles[IDX_CHAR_CFG_D];
-                notify_targets[3].val_handle = param->add_attr_tab.handles[IDX_CHAR_VAL_D];
-                notify_targets[4].cfg_handle = param->add_attr_tab.handles[IDX_CHAR_CFG_E];
-                notify_targets[4].val_handle = param->add_attr_tab.handles[IDX_CHAR_VAL_E];
+                ESP_LOGI(GATTS_TABLE_TAG, "create attribute table successfully, the number handle = %d",param->add_attr_tab.num_handle);
+                constexpr uint16_t cfg_indices[6] = {IDX_CHAR_CFG_A, IDX_CHAR_CFG_B, IDX_CHAR_CFG_C, IDX_CHAR_CFG_D, IDX_CHAR_CFG_E, IDX_CHAR_CFG_F};
+                constexpr uint16_t val_indices[6] = {IDX_CHAR_VAL_A, IDX_CHAR_VAL_B, IDX_CHAR_VAL_C, IDX_CHAR_VAL_D, IDX_CHAR_VAL_E, IDX_CHAR_VAL_F};
+                for (int i = 0; i < 6; ++i) {
+                    notify_targets[i].cfg_handle = param->add_attr_tab.handles[cfg_indices[i]];
+                    notify_targets[i].val_handle = param->add_attr_tab.handles[val_indices[i]];
+                }
                 esp_ble_gatts_start_service(param->add_attr_tab.handles[IDX_SVC]);
             }
             break;
@@ -502,6 +520,7 @@ esp_err_t Ble_comm::begin(void){
     }
     return ESP_OK;
 }
+
 void Ble_comm::sendMsg(char *msg, unsigned char len) {
     // 接続中かつconn_idが有効な場合のみ送信
     if (Ble_comm::profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
@@ -519,14 +538,12 @@ void Ble_comm::sendMsg(char *msg, unsigned char len) {
 void Ble_comm::sendTelemetry(){
     if (Ble_comm::profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
         Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id != 0xFFFF) {
-        // Notify Xhat telemetry
-        ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
-                                    notify_targets[0].val_handle, notify_targets[0].value_len, notify_targets[0].value_ptr, false));
-        // Notify PRY telemetry
-        ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
-                                    notify_targets[1].val_handle, notify_targets[1].value_len, notify_targets[1].value_ptr, false));
-        // Notify Control U telemetry
-        ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
-                                    notify_targets[2].val_handle, notify_targets[2].value_len, notify_targets[2].value_ptr, false));
+        //Telemetryするリスト
+        int telem_list[] = {0, 1, 2, 5}; // Xhat, PRY, Control U, Quaternion
+        for (uint8_t i = 0; i < sizeof(telem_list)/sizeof(telem_list[0]); i++)
+        {
+            ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
+                                        notify_targets[telem_list[i]].val_handle, notify_targets[telem_list[i]].value_len, notify_targets[telem_list[i]].value_ptr, false));
+        }
     }
 }

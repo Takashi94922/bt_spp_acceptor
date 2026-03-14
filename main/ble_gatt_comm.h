@@ -52,6 +52,10 @@ enum
     IDX_CHAR_E,
     IDX_CHAR_VAL_E,
     IDX_CHAR_CFG_E,
+
+    IDX_CHAR_F,
+    IDX_CHAR_VAL_F,
+    IDX_CHAR_CFG_F,
     IDX_NB,
 };
 typedef struct {
@@ -90,6 +94,7 @@ constexpr uint16_t GATTS_CHAR_UUID_PRY_Telem = 0xFF02;
 constexpr uint16_t GATTS_CHAR_UUID_contU_TelemWrite = 0xFF03;
 constexpr uint16_t GATTS_CHAR_UUID_ContGain_Upd = 0xFF04;
 constexpr uint16_t GATTS_CHAR_UUID_Command = 0xFF05;
+constexpr uint16_t GATTS_CHAR_UUID_Quaternion_Telem = 0xFF06;
 
 constexpr uint16_t primary_service_uuid         = ESP_GATT_UUID_PRI_SERVICE;
 constexpr uint16_t character_declaration_uuid   = ESP_GATT_UUID_CHAR_DECLARE;
@@ -101,7 +106,7 @@ constexpr uint8_t char_prop_read_write_notify   = ESP_GATT_CHAR_PROP_BIT_WRITE_N
 
 class Ble_comm {
 public:
-    Ble_comm(float *xhat_value_p,float* PRY_value_p, float* controlU_p, float * controlGain_p);
+    Ble_comm(float *xhat_value_p,float* PRY_value_p, float* controlU_p, float * controlGain_p, float *q_p);
     esp_err_t begin();
 
     bool isClientConnecting(){
@@ -149,12 +154,15 @@ private:
     static gatts_profile_inst profile_tab[PROFILE_NUM];
     
     static esp_gatts_attr_db_t gatt_db[IDX_NB];
-    static notify_target_t notify_targets[5];
+    static notify_target_t notify_targets[6];
+    static notify_target_t* getNotifyTargetByCfgHandle(uint16_t cfg_handle);
+    static notify_target_t* getNotifyTargetByValHandle(uint16_t val_handle);
     // BLE values and buffers
     static float *xhat_value;
     static float *PRY_value;
     static float *controlU;
     static float *controlGain;
+    static float *q;
     static void (*command_cb)(uint8_t* data, uint16_t len);
 
     static prepare_type_env_t *env_list[5];

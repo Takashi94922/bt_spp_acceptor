@@ -52,7 +52,8 @@ Motion_control motion;
         motion.xhat.data,
         motion.PRY_value,
         motion.u.data, 
-        motion.KC.data
+        motion.KC.data,
+        motion.q.data
     );
 #endif
 
@@ -114,7 +115,7 @@ void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
 void IRAM_ATTR timerKF_callback(TimerHandle_t xTimer)
 {
     //ESP_LOGI("Timer", "calculating.. u");
-    //motion.filterUpdate();
+    motion.filterUpdate();
 }
 
 
@@ -163,21 +164,22 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         case 13:
             if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], (float*)&msg[2]);
             break;
-        default:
-            if (msg[0] > 6 && msg[0] < 10 && msglen > 1+sizeof(float)*6) {
+        case 6 ... 9:
+            if (msglen >= 1+sizeof(float)*6) {
                 ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
                 memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
-                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
-            } else {
-                ESP_LOGI(TAG, "Unknown command.");
-                if (bl_comm.isClientConnecting()) {
-                    bl_comm.sendMsg("Unknown command.", 15);
-                }
             }
+            break;
+        default: {   
+            ESP_LOGI(TAG, "Unknown command.");
+            if (bl_comm.isClientConnecting()) {
+                bl_comm.sendMsg("Unknown command.", 15);
+            }
+        }
     }
 }
 
-static void i2c_master_init(float IMU_sampleFreq, float Cont_freq)
+static void sensor_controller_init(float IMU_sampleFreq, float Cont_freq)
 {
     i2c_master_bus_config_t bus_conf = {
         .i2c_port = -1,
@@ -281,18 +283,13 @@ extern "C" void app_main(void)
 
     const int IMU_sampling_ms = 2;
     const int CalcU_sampling_ms = 4;
-    i2c_master_init(1000/IMU_sampling_ms, 1000/CalcU_sampling_ms);
+    const int CalcKF_sampling_ms = 2;
+    sensor_controller_init(1000/IMU_sampling_ms, 1000/CalcU_sampling_ms);
     // タイマーを作成し、コールバック関数を設定します。
-    TimerHandle_t timer = create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
-
-    TimerHandle_t timerU = create_and_start_timer("CalcU Timer", CalcU_sampling_ms, timerU_callback, 1);
-
-    //kalman filter用たいまー
-    const int CalcKF_sampling_ms = 10;
-    TimerHandle_t timerKF = create_and_start_timer("CalcKF Timer", CalcKF_sampling_ms, timerKF_callback, 1);
-
-    // 新たなタイマーを作成し、コールバック関数を設定します。
-    TimerHandle_t bl_telemetry = create_and_start_timer("BL Telemetry", 200, bl_telemetry_callback, 2);
+    create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
+    create_and_start_timer("CalcU Timer", CalcU_sampling_ms, timerU_callback, 1);
+    create_and_start_timer("CalcKF Timer", CalcKF_sampling_ms, timerKF_callback, 1);
+    create_and_start_timer("BL Telemetry", 200, bl_telemetry_callback, 2);
 
     // タスクをブロックします。
     vTaskDelay(portMAX_DELAY);

@@ -32,19 +32,8 @@ void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_
 void Motion_control::Sensor2Body(){
 	//imu座標から機体座標系
 	//※LSM9DS1のg/aは左手系でmは右手系
-	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
-	a_imu(1, 0) = -imu.calcAccel(imu.ay) * gravity_c;
-	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
 	a = IMU_2_body * a_imu;
-
-	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
-	g_imu(1, 0) = -imu.calcGyro(imu.gy) * deg2rad;
-	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
 	g = IMU_2_body * g_imu;
-
-	m_imu(0, 0) = -imu.calcMag(imu.mx) * 0.00014f;
-	m_imu(1, 0) = -imu.calcMag(imu.my) * 0.00014f;
-	m_imu(2, 0) = imu.calcMag(imu.mz) * 0.00014f; // gauss/LSB
 	m = IMU_2_body * m_imu;
 
 	skew(g);
@@ -57,7 +46,18 @@ void Motion_control::Sensor2Body(){
 
 	g_prev = g;
 }
+
 void Motion_control::filterUpdate(){
+	//Kalman Filterの更新処理だが、ESP32の性能を考慮して、計算はテレメトリ先で行う。
+	xhat(0, 0) = a_imu(0, 0);
+	xhat(1, 0) = a_imu(1, 0);
+	xhat(2, 0) = a_imu(2, 0);
+	xhat(3, 0) = g_imu(0, 0);
+	xhat(4, 0) = g_imu(1, 0);
+	xhat(5, 0) = g_imu(2, 0);	
+
+	//以下はESP32で計算するばあいのコード。
+	/* 	
 	//imu->機体座標の変換＋向心力の補正
 	Sensor2Body();
 
@@ -161,7 +161,7 @@ void Motion_control::filterUpdate(){
 
 	//P = (I-KH)P
 	P = (dspm::Mat::eye(6) - K*H)*P;
-	//ESP_LOGI(TAG, "Kalman Updated");
+	//ESP_LOGI(TAG, "Kalman Updated"); */
 }
 
 // out = R(q) * a
@@ -197,14 +197,25 @@ void Motion_control::update(){
     imu.readGyro();
     imu.readMag();
 
-	//IMU座標系で姿勢を計算
-	//※LSM9DS1のg/aは左手系でmは右手系
-	madgwick.update(imu.calcGyro(imu.gx), -imu.calcGyro(imu.gy), imu.calcGyro(imu.gz),
-				imu.calcAccel(imu.ax), -imu.calcAccel(imu.ay), imu.calcAccel(imu.az),
-				-imu.calcMag(imu.mx), -imu.calcMag(imu.my), imu.calcMag(imu.mz));
+	//LSM9DS1のg/aは左手系でmは右手系なので、ここで座標変換を行う。
+	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
+	a_imu(1, 0) = -imu.calcAccel(imu.ay) * gravity_c;
+	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
+	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
+	g_imu(1, 0) = -imu.calcGyro(imu.gy) * deg2rad;
+	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
+	m_imu(0, 0) = -imu.calcMag(imu.mx) * 0.00014f;
+	m_imu(1, 0) = -imu.calcMag(imu.my) * 0.00014f;
+	m_imu(2, 0) = imu.calcMag(imu.mz) * 0.00014f; // gauss/LSB
+
+	//IMU座標系で姿勢を計算	
+	madgwick.update(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
+				a_imu(0, 0), a_imu(1, 0), a_imu(2, 0),
+				m_imu(0, 0), m_imu(1, 0), m_imu(2, 0));
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
+	getQuaternion(q.data);
 
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
@@ -246,6 +257,13 @@ float PID::calculatePID(float current) {
     return Kp * error + Ki * integral + Kd * derivative;
 }
 
+void Motion_control::getQuaternion(float* retbuf){
+	retbuf[0] = madgwick.q0;
+	retbuf[1] = madgwick.q1;
+	retbuf[2] = madgwick.q2;
+	retbuf[3] = madgwick.q3;
+}
+
 // PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
 	//IMU座標系から機体座標系の姿勢角を取得する
@@ -274,19 +292,15 @@ void Motion_control::correctInitValue(uint16_t num_loop){
         imu.readGyro();
 		imu.readAccel();
 		imu.readMag();
-		for (uint8_t i = 0; i < 3; i++)
-		{
-			g0[i] += imu.gx;
-			a0[i] += imu.ax;
-			m0[i] += imu.mx;
-		}
-
-	}
-
-	for (uint8_t i = 0; i<3; i++){
-		g0[i] = g0[i]/num_loop;
-		a0[i] = a0[i]/num_loop;
-		m0[i] = m0[i]/num_loop;	
+		g0[0] += g0[0] / 2.0f + imu.calcGyro(imu.gx)/2.0f * gravity_c;
+		g0[1] += g0[1] / 2.0f + imu.calcGyro(imu.gy)/2.0f * gravity_c;
+		g0[2] += g0[2] / 2.0f + imu.calcGyro(imu.gz)/2.0f * gravity_c;
+		a0[0] += a0[0] / 2.0f + imu.calcAccel(imu.ax)/2.0f * deg2rad;
+		a0[1] += a0[1] / 2.0f + imu.calcAccel(imu.ay)/2.0f * deg2rad;
+		a0[2] += a0[2] / 2.0f + imu.calcAccel(imu.az)/2.0f * deg2rad;
+		m0[0] += m0[0] / 2.0f + imu.calcMag(imu.mx)/2.0f * 0.00014f;
+		m0[1] += m0[1] / 2.0f + imu.calcMag(imu.my)/2.0f * 0.00014f;
+		m0[2] += m0[2] / 2.0f + imu.calcMag(imu.mz)/2.0f * 0.00014f;
 	}
 
 	ESP_LOGI(TAG, "calibrate FINISH");
