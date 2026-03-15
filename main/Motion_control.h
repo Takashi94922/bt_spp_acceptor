@@ -86,8 +86,8 @@ public:
 
 		// PID制御用のインスタンス
 		//吸い込み力と釣り合わせるためpitchだけちょっと後ろに傾ける
-		pitch_pid = {12.0f, 3.0f, 0.1f, 0.0f, 0.0f, 0.1f};
-		roll_pid = {10.0f, 2.0f, 0.1f, 0.0f, 0.0f, 0.0f};
+		pitch_pid = {7.2f, 0.0f, 0.54f, 0.0f, 0.0f, 0.1f};
+		roll_pid = {9.60f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f};
 		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0f};
 	}
 
@@ -147,6 +147,7 @@ public:
 	//単位はrad
     void getPRY(float *retbuf);
 	void getQuaternion(float* retbuf);
+	void setPRYtarget(float pitch_target, float roll_target, float yaw_target);
     void calib();
     void correctInitValue(uint16_t num_loop);
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);

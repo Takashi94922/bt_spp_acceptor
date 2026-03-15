@@ -147,6 +147,12 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         case 5:
             motion.ControlMethod = msg[1];
             break;
+        case 6 ... 9:
+            if (msglen >= 1+sizeof(float)*6) {
+                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
+                memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
+            }
+            break;
         case 10: {
             uint8_t valServo[4];
             memcpy(valServo, &msg[1], sizeof(uint8_t)*4);
@@ -164,11 +170,21 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         case 13:
             if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], (float*)&msg[2]);
             break;
-        case 6 ... 9:
-            if (msglen >= 1+sizeof(float)*6) {
-                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
-                memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
-            }
+
+        //PID目標値の一括セット
+        case 14:
+            motion.setPRYtarget(*(float*)&msg[1], *(float*)&msg[2],*(float*)&msg[3]);
+            break;
+        //PID目標値の個別セット
+        case 15:
+            float target_val;
+            motion.pitch_pid.target = (float)msg[1];
+            break;
+        case 16:
+            motion.roll_pid.target = (float)msg[1];
+            break;
+        case 17:
+            motion.yaw_pid.target = (float)msg[1];
             break;
         default: {   
             ESP_LOGI(TAG, "Unknown command.");

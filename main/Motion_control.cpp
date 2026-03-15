@@ -273,6 +273,12 @@ void Motion_control::getPRY(float* retbuf){
 	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
 }
 
+void Motion_control::setPRYtarget(float pitch_target, float roll_target, float yaw_target){
+	pitch_pid.target = pitch_target;
+	roll_pid.target = roll_target;
+	yaw_pid.target = yaw_target;
+}
+
 void Motion_control::calib(){
 	imu.calibrate(true);
 }
