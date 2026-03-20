@@ -10,7 +10,7 @@ struct PID {
 	float dt_cont;
 	float prev_error;
 	float integral;
-	float target = 0; // 目標値（セットポイント）
+	float target; // 目標値（セットポイント）
 	float calculatePID(float current);
 };
 class Motion_control{
@@ -86,9 +86,9 @@ public:
 
 		// PID制御用のインスタンス
 		//吸い込み力と釣り合わせるためpitchだけちょっと後ろに傾ける
-		pitch_pid = {7.2f, 0.0f, 0.54f, 0.0f, 0.0f, 0.1f};
-		roll_pid = {9.60f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f};
-		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0f};
+		pitch_pid = {7.2f, 0.0f, 0.54f, 0.0f, 0.0f, 0.0, -0.1f};
+		roll_pid = {9.60f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0, 0.0f};
+		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0, 0.0f};
 	}
 
 	static constexpr float gravity_c = 9.80665;

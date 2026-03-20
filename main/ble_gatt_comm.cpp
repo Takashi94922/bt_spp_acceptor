@@ -545,7 +545,7 @@ void Ble_comm::sendTelemetry(){
     if (Ble_comm::profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
         Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id != 0xFFFF) {
         //Telemetryするリスト
-        int telem_list[] = {0, 1, 2, 5}; // Xhat, PRY, Control U, Quaternion
+        uint8_t telem_list[] = {0, 1, 2, 5}; // Xhat, PRY, Control U, Quaternion
         for (uint8_t i = 0; i < sizeof(telem_list)/sizeof(telem_list[0]); i++)
         {
             ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,

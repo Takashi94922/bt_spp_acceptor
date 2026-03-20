@@ -142,7 +142,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
     
     switch (msg[0]) {
         case 0 ... 4:
-            set_servo_pwm(msg[0], (float)msg[1]);
+            set_servo_pwm(msg[0], *(float*)&msg[1]);
             break;
         case 5:
             motion.ControlMethod = msg[1];
@@ -177,14 +177,13 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         //PID目標値の個別セット
         case 15:
-            float target_val;
-            motion.pitch_pid.target = (float)msg[1];
+            motion.pitch_pid.target = *(float*)&msg[1];
             break;
         case 16:
-            motion.roll_pid.target = (float)msg[1];
+            motion.roll_pid.target = *(float*)&msg[1];
             break;
         case 17:
-            motion.yaw_pid.target = (float)msg[1];
+            motion.yaw_pid.target = *(float*)&msg[1];
             break;
         default: {   
             ESP_LOGI(TAG, "Unknown command.");
