@@ -18,16 +18,25 @@ class Motion_control{
 	Madgwick madgwick;
 	dspm::Mat trans;
 	//Body座標系でみたときの重心位置[m]
-	float x_IMU_src[3] = {41.254E-3, 1.061E-3, 53.987E-3};
+	//float x_IMU_src[3] = {41.254E-3, 1.061E-3, 53.987E-3};
+	float x_IMU_src[3] = {56.268E-3, 0.01E-3, -9.529E-3};
 	dspm::Mat x_IMU = dspm::Mat(x_IMU_src, 3,1);
 
 	float g_prev_src[3] = {0.0f, 0.0f, 0.0f};
 	dspm::Mat g_prev = dspm::Mat(g_prev_src, 3,1);
 
-	float IMU2body_src[9] = {
+	//X字の時のIMUから見たベクトル
+/* 	float IMU2body_src[9] = {
 		0, 0, -1,
 		-1, 0, 0,
 		0, -1, 0
+	}; */
+	
+	//Vertの時のIMUから見たベクトル
+	float IMU2body_src[9] = {
+		0, 0, 1,
+		1, 0, 0,
+		0, 1, 0
 	};
 	dspm::Mat IMU_2_body = dspm::Mat(IMU2body_src, 3, 3);
 public:
@@ -75,12 +84,19 @@ public:
 		KC = dspm::Mat(KCsrc, 5, 6);
 
 		//{pitch roll yaw}
-		float KPIDsrc[] = {
+/* 		float KPIDsrc[] = {
 			0,0,0,
 			1, 1, 0,
 			-1, 1, 0,
 			-1, -1, 0,
 			1, -1, 0,	
+		}; */
+		float KPIDsrc[] = {
+			0,0,0,
+			1, -1, 1,
+			-1, -1, 1,
+			-1, 1, 1,
+			1, 1, 1,	
 		};
 		KPID = dspm::Mat(KPIDsrc, 5, 3);
 

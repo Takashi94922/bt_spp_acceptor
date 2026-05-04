@@ -268,8 +268,13 @@ void Motion_control::getQuaternion(float* retbuf){
 void Motion_control::getPRY(float* retbuf){
 	//IMU座標系から機体座標系の姿勢角を取得する
 	//retbufの順番は pitch roll yaw
-	retbuf[0] = -(madgwick.getRollRadians() - 1.5707963267f); // pitch
+	//X字
+/* 	retbuf[0] = -(madgwick.getRollRadians() - 1.5707963267f); // pitch
 	retbuf[1] =  (madgwick.getPitchRadians() - PRY_offset[1]); // roll
+	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw */
+	//V字
+ 	retbuf[0] = (madgwick.getRollRadians() - 1.5707963267f); // pitch
+	retbuf[1] =  -(madgwick.getPitchRadians() - PRY_offset[1]); // roll
 	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
 }
 

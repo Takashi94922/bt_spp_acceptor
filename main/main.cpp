@@ -142,7 +142,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
     
     switch (msg[0]) {
         case 0 ... 4:
-            set_servo_pwm(msg[0], *(float*)&msg[1]);
+            set_servo_pwm(msg[0], msg[1]);
             break;
         case 5:
             motion.ControlMethod = msg[1];
@@ -252,10 +252,10 @@ static void pwm_init(){
     Thrust->begin();
     Thrust->setPWM(0);
 
-    init_servo(&Servo1, GPIO_NUM_4, operServo, 900, 2100, 44.0f);
-    init_servo(&Servo2, GPIO_NUM_16, operServo, 900, 2100, 56.0f);
-    init_servo(&Servo3, GPIO_NUM_22, operServo2, 900, 2100, 56.0f);
-    init_servo(&Servo4, GPIO_NUM_17, operServo2, 900, 2100, 44.0f);
+    init_servo(&Servo1, GPIO_NUM_4, operServo, 900, 2100, 50.0f);
+    init_servo(&Servo2, GPIO_NUM_16, operServo, 900, 2100, 50.0f);
+    init_servo(&Servo3, GPIO_NUM_22, operServo2, 900, 2100, 50.0f);
+    init_servo(&Servo4, GPIO_NUM_17, operServo2, 900, 2100, .0f);
 
     if(Thrust == NULL || Servo1 == NULL || Servo2 == NULL || Servo3 == NULL || Servo4 == NULL) {
         ESP_LOGE(TAG, "Motor or Servo creation failed");
