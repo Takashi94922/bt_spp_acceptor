@@ -7,6 +7,9 @@
 #include "dsp_platform.h"
 #include "mat.h"
 
+#define FLIGHT_MODE_VERT // 0:Vert 1:X
+//#define FLIGHT_MODE_X // 0:KC 1:PID 2:Future reserved
+
 // 3×1 行列から 3×3 のスキュー対称行列を生成
 void Motion_control::skew( dspm::Mat &v )
 {
@@ -232,14 +235,24 @@ void Motion_control::calcU(){
 		xsrc[1] = roll_pid.calculatePID(PRY_value[1]);
 		xsrc[2] = yaw_pid.calculatePID(PRY_value[2]);
 
-    	// 制御出力を使用して次の処理を実行
-    	u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
-		
-		// u(1,0)～u(4,0)を50～100の範囲にクランプ
-		for (uint8_t i = 1; i < 5; i++) {
-			if (u(i, 0) < 50.0f) u(i, 0) = 50.0f;
-			if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
-		}
+		#ifdef FLIGHT_MODE_X
+			// 制御出力を使用して次の処理を実行
+			u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
+			
+			// u(1,0)～u(4,0)を50～100の範囲にクランプ
+			for (uint8_t i = 1; i < 5; i++) {
+				if (u(i, 0) < 50.0f) u(i, 0) = 50.0f;
+				if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
+			}
+
+		#elif defined(FLIGHT_MODE_VERT)
+			// V字のモードは、u(1,0)～u(4,0)を0～100の範囲にクランプ
+			u = KPID * dspm::Mat(xsrc, 3, 1) + 50.0f;
+			for (uint8_t i = 1; i < 5; i++) {
+				if (u(i, 0) < 0.0f) u(i, 0) = 0.0f;
+				if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
+			}
+		#endif
 	}
 	else if(ControlMethod == 3){
 		//future reserved
