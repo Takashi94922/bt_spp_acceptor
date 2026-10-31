@@ -51,6 +51,14 @@
 #define EMERGENCY_THROTTLE     30.0f  // 緊急時のスロットル上限[%]。0だと墜落するので降下できる推力を残す
 #define HEARTBEAT_TIMEOUT_MS   1000   // この時間コマンドが届かなければ緊急動作
 #define CMD_HEARTBEAT          18     // モニターからの生存通知コマンド（中身は使わない）
+#define CMD_GYRO_CALIB         19     // ジャイロのバイアス校正。結果は同じ番号で Command の通知に返す
+
+// ジャイロ校正の結果（Command の通知で返す）
+enum GyroCalibStatus : uint8_t {
+    GYRO_CALIB_OK = 0,        // 校正した
+    GYRO_CALIB_MOVING = 1,    // 静止していなかった（最後の測定結果を使った）
+    GYRO_CALIB_REJECTED = 2,  // スロットルが0でないので実行しなかった
+};
 
 #define TAG "ESP_SPP_DRONE"
 
@@ -133,6 +141,26 @@ static void check_heartbeat()
     }
 }
 
+// ---- ジャイロ校正 ----
+// 校正は制御タスクで行う（I2Cを読むのは制御タスクだけにする）。コマンドでは要求を立てるだけ
+static volatile bool gyro_calib_requested = false;
+// 校正中（約0.5〜1.5秒、制御は止まる）。この間はスロットルの指令を受け付けない
+static volatile bool gyro_calibrating = false;
+
+static void send_gyro_calib_result(uint8_t status)
+{
+    if (!bl_comm.isClientConnecting()) return;
+    // [CMD_GYRO_CALIB, status, bias x/y/z (float, deg/s, IMU座標)]
+    char msg[2 + sizeof(float) * 3];
+    msg[0] = CMD_GYRO_CALIB;
+    msg[1] = status;
+    for (int i = 0; i < 3; i++) {
+        float b = motion.g_bias[i] * Motion_control::rad2deg;
+        memcpy(&msg[2 + sizeof(float) * i], &b, sizeof(float));
+    }
+    bl_comm.sendMsg(msg, sizeof(msg));
+}
+
 // 制御ループの負荷計測（app_mainで定期的にログ出力する）
 static volatile uint32_t ctrl_overrun_count = 0;  // 処理が間に合わず取りこぼした周期数
 static volatile uint32_t ctrl_exec_max_us = 0;    // 1周期の最大処理時間
@@ -185,6 +213,19 @@ static void control_task(void* arg)
     for(;;){
         // 通知が2以上溜まっていたら前周期の処理が間に合っていない
         uint32_t pending = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        if (gyro_calib_requested) {
+            gyro_calib_requested = false;
+            gyro_calibrating = true;
+            bool still = motion.calibrateGyro();
+            gyro_calibrating = false;
+            send_gyro_calib_result(still ? GYRO_CALIB_OK : GYRO_CALIB_MOVING);
+            // 校正中に溜まった周期は取りこぼしとして数えない
+            ulTaskNotifyTake(pdTRUE, 0);
+            u_count = 0;
+            continue;
+        }
+
         if (pending > 1) ctrl_overrun_count = ctrl_overrun_count + (pending - 1);
 
         int64_t t0 = esp_timer_get_time();
@@ -222,6 +263,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
     
     switch (msg[0]) {
         case 0 ... 4:
+            if (msg[0] == 0 && gyro_calibrating) break; // 校正中は制御が止まっているので推力を上げない
             set_servo_pwm(msg[0], msg[1]);
             break;
         case 5:
@@ -258,6 +300,15 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         // ハートビート（受信時刻の更新はon_command_receivedで済んでいる）
         case CMD_HEARTBEAT:
+            break;
+        // ジャイロ校正。校正中は制御が止まるので、スロットル0のとき（地上で静止）だけ受け付ける
+        case CMD_GYRO_CALIB:
+            if (Thrust->getPercent() > 0.0f) {
+                ESP_LOGW(TAG, "gyro calibration rejected: throttle is not 0");
+                send_gyro_calib_result(GYRO_CALIB_REJECTED);
+            } else {
+                gyro_calib_requested = true;
+            }
             break;
         default: {   
             ESP_LOGI(TAG, "Unknown command.");

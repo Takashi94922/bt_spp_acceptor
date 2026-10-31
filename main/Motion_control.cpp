@@ -40,9 +40,14 @@ void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_
 	madgwick.begin(sampleFreq);
 
 	// 静止中にジャイロのバイアスを測ってから姿勢推定を始める
-	calibrateGyroBias(gyro_calib_samples);
+	calibrateGyro();
+}
+
+bool Motion_control::calibrateGyro(){
+	bool still = calibrateGyroBias(gyro_calib_samples);
 	madgwick.setBeta(beta_init);
-	beta_init_count = (uint32_t)(beta_init_time * sampleFreq);
+	beta_init_count = (uint32_t)(beta_init_time / dt_imu);
+	return still;
 }
 
 void Motion_control::Sensor2Body(){
@@ -454,8 +459,8 @@ void Motion_control::gyroImu(float *out){
 }
 
 // 静止状態でジャイロのバイアスを測る。起動直後に呼ぶので、その間は機体を動かさないこと。
-// 動いていたと判定したら測り直す（3回まで）
-void Motion_control::calibrateGyroBias(uint16_t samples){
+// 動いていたと判定したら測り直す（3回まで）。3回とも動いていたらfalse（最後の結果を使う）
+bool Motion_control::calibrateGyroBias(uint16_t samples){
 	for (int attempt = 0; attempt < 3; attempt++) {
 		float sum[3] = {0}, sq[3] = {0};
 		for (uint16_t i = 0; i < samples; i++) {
@@ -478,8 +483,9 @@ void Motion_control::calibrateGyroBias(uint16_t samples){
 		}
 		ESP_LOGI(TAG, "gyro bias [deg/s]: %.2f %.2f %.2f (std max %.2f)",
 				 g_bias[0] * rad2deg, g_bias[1] * rad2deg, g_bias[2] * rad2deg, std_max * rad2deg);
-		if (std_max <= gyro_still_std) return;
+		if (std_max <= gyro_still_std) return true;
 		ESP_LOGW(TAG, "gyro calibration: drone seems to be moving, retry");
 	}
 	ESP_LOGW(TAG, "gyro calibration: using the last result although the drone was moving");
+	return false;
 }

@@ -196,7 +196,8 @@ public:
 	void setPIDGain(uint8_t axis, uint8_t type, float value); // type 0:Kp 1:Ki 2:Kd
 	void setControlMethod(uint8_t method);
 	void setKC(const uint8_t *src, uint16_t first, uint16_t count); // KC.data[first..] にfloatをcount個
-	void calibrateGyroBias(uint16_t samples);
+	bool calibrateGyroBias(uint16_t samples);
+	bool calibrateGyro(); // バイアスを測り直し、姿勢推定を素早く合わせ直す。静止していればtrue
 	void gyroImu(float *out);
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);
 };
