@@ -28,6 +28,14 @@ void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_
 	pitch_pid.dt_cont = dt_cont;
 	roll_pid.dt_cont = dt_cont;
 	yaw_pid.dt_cont = dt_cont;
+
+    // ---- LPF設定 ----
+	alpha = 1.0f / (1.0f + 2.0f * 3.1415926f * fc * dt_imu); // LPFの係数計算
+
+	mag_div = (uint16_t)(sampleFreq / mag_odr + 0.5f);
+	if (mag_div < 1) mag_div = 1;
+	mag_count = 0;
+
 	madgwick.begin(sampleFreq);
 	//correctInitValue(10);
 }
@@ -195,10 +203,13 @@ void Motion_control::rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat 
 }
 
 void Motion_control::update(){
-	imu.readTemp();
+	// I2Cトランザクションを減らすため、未使用の温度は読まず、磁気はmag_div回に1回だけ読む
     imu.readAccel();
     imu.readGyro();
-    imu.readMag();
+	if (mag_count == 0) {
+		imu.readMag();
+	}
+	if (++mag_count >= mag_div) mag_count = 0;
 
 	//LSM9DS1のg/aは左手系でmは右手系なので、ここで座標変換を行う。
 	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
@@ -223,10 +234,23 @@ void Motion_control::update(){
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
 	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
 }
+// out = scale * M * x + offset をoutに直接書き込む
+// dspm::Matの演算子は一時行列をヒープ確保するので、制御周期ごとの計算ではこちらを使う
+static void mat_vec_affine(dspm::Mat &out, const dspm::Mat &M, const float *x, float scale, float offset)
+{
+	for (int i = 0; i < M.rows; i++) {
+		float acc = 0.0f;
+		for (int j = 0; j < M.cols; j++) {
+			acc += M(i, j) * x[j];
+		}
+		out(i, 0) = scale * acc + offset;
+	}
+}
+
 void Motion_control::calcU(){
 	if (ControlMethod == 0 || ControlMethod == 1) {
 		float xsrc[] = {0, 0, 0, madgwick.getPitchRadians(), madgwick.getRollRadians(), 0};
-		u = -1 * KC * dspm::Mat(xsrc, 6, 1) + 75.0f;
+		mat_vec_affine(u, KC, xsrc, -1.0f, 75.0f);
 	}
 	else if (ControlMethod == 2) {
 		// PID制御を適用
@@ -237,7 +261,7 @@ void Motion_control::calcU(){
 
 		#ifdef FLIGHT_MODE_X
 			// 制御出力を使用して次の処理を実行
-			u = KPID * dspm::Mat(xsrc, 3, 1) + 75.0f;
+			mat_vec_affine(u, KPID, xsrc, 1.0f, 75.0f);
 			
 			// u(1,0)～u(4,0)を50～100の範囲にクランプ
 			for (uint8_t i = 1; i < 5; i++) {
@@ -247,7 +271,7 @@ void Motion_control::calcU(){
 
 		#elif defined(FLIGHT_MODE_VERT)
 			// V字のモードは、u(1,0)～u(4,0)を0～100の範囲にクランプ
-			u = KPID * dspm::Mat(xsrc, 3, 1) + 50.0f;
+			mat_vec_affine(u, KPID, xsrc, 1.0f, 50.0f);
 			for (uint8_t i = 1; i < 5; i++) {
 				if (u(i, 0) < 0.0f) u(i, 0) = 0.0f;
 				if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
@@ -286,9 +310,31 @@ void Motion_control::getPRY(float* retbuf){
 	retbuf[1] =  (madgwick.getPitchRadians() - PRY_offset[1]); // roll
 	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw */
 	//V字
+	/*
  	retbuf[0] = (madgwick.getRollRadians() - 1.5707963267f); // pitch
 	retbuf[1] =  -(madgwick.getPitchRadians() - PRY_offset[1]); // roll
 	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
+*/
+
+    // ---- 生のRPY取得（V字配置）----
+    float raw_pitch =  (madgwick.getRollRadians()  - 1.5707963267f);
+    float raw_roll  = -(madgwick.getPitchRadians() - PRY_offset[1]);
+    float raw_yaw   = -(madgwick.getYawRadians()   - PRY_offset[2]);
+
+    // ---- LPF用の内部状態 ----
+    static float flt_pitch = 0.0f;
+    static float flt_roll  = 0.0f;
+    static float flt_yaw   = 0.0f;
+
+    // ---- 一次LPF ----
+    flt_pitch = alpha * flt_pitch + (1.0f - alpha) * raw_pitch;
+    flt_roll  = alpha * flt_roll  + (1.0f - alpha) * raw_roll;
+    flt_yaw   = alpha * flt_yaw   + (1.0f - alpha) * raw_yaw;
+
+    // ---- 出力 ----
+    retbuf[0] = flt_pitch;
+    retbuf[1] = flt_roll;
+    retbuf[2] = flt_yaw;
 }
 
 void Motion_control::setPRYtarget(float pitch_target, float roll_target, float yaw_target){

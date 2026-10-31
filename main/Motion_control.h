@@ -114,6 +114,15 @@ public:
 	float dt_imu = 10E-3;
 	float dt_cont = 1.0f;
 
+	// ---- LPF設定 ----
+    static constexpr float fc = 20.0f;           // カットオフ周波数(Hz)  ←調整ポイント
+ 	float alpha = 1.0f;
+
+	// 磁気センサはODR 80Hzなので、IMU周期ごとには読まずに間引く
+	static constexpr float mag_odr = 80.0f;
+	uint16_t mag_div = 1;   // 何回に1回磁気を読むか
+	uint16_t mag_count = 0;
+
 	float gv[3] = {0.0, 0.0, -gravity_c};
 	float a0[3] = {0};
 	float g0[3] = {0};

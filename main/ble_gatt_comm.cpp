@@ -548,8 +548,13 @@ void Ble_comm::sendTelemetry(){
         uint8_t telem_list[] = {0, 1, 2, 5}; // Xhat, PRY, Control U, Quaternion
         for (uint8_t i = 0; i < sizeof(telem_list)/sizeof(telem_list[0]); i++)
         {
-            ESP_ERROR_CHECK(esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
-                                        notify_targets[telem_list[i]].val_handle, notify_targets[telem_list[i]].value_len, notify_targets[telem_list[i]].value_ptr, false));
+            // 送信バッファ溢れ等で失敗しても飛行中にabortさせない。今回分は諦めて次周期に送る
+            esp_err_t err = esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
+                                        notify_targets[telem_list[i]].val_handle, notify_targets[telem_list[i]].value_len, notify_targets[telem_list[i]].value_ptr, false);
+            if (err != ESP_OK) {
+                ESP_LOGW(GATTS_TABLE_TAG, "telemetry send failed: %s", esp_err_to_name(err));
+                break;
+            }
         }
     }
 }

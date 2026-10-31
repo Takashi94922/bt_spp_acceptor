@@ -23,6 +23,8 @@
 #include "driver/mcpwm_cmpr.h"
 #include "driver/mcpwm_oper.h"
 #include "driver/mcpwm_gen.h"
+#include "driver/gptimer.h"
+#include "esp_timer.h"
 
 #include "ESP32_i2c_LSM9DS1.h"
 #include "MadgwickAHRS.h"
@@ -32,6 +34,12 @@
 
 #define SERVO_TIMEBASE_RESOLUTION_HZ 1000000  // 1MHz, 1us per tick
 #define SERVO_TIMEBASE_PERIOD        20000    // 20000 ticks, 20ms
+
+// 制御ループの周期設定。IMU/KFの周期を基本周期とし、制御計算はその整数倍で回す
+#define CONTROL_BASE_PERIOD_US 2000   // IMU/KF周期 [us]（2ms = 500Hz）
+#define CONTROL_U_DIV          2      // 制御計算は基本周期N回に1回（2ms*2 = 4ms）
+#define CONTROL_TASK_CORE      1      // Bluedroid/BTコントローラはCore 0固定なのでCore 1で回す
+#define CONTROL_TASK_PRIO      20
 
 #define TAG "ESP_SPP_DRONE"
 
@@ -57,9 +65,10 @@ Motion_control motion;
     );
 #endif
 
-TaskHandle_t bl_telem_handle_t = NULL;
+// テレメトリタスク実行中フラグ。タスク生成前に立て、タスク終了時に下ろす
+static volatile bool bl_telem_busy = false;
 //blでIMUデータを送信するのをノンブロッキングでやるためのタスク
-void telemetry_task(){
+void telemetry_task(void* arg){
     //ESP_LOGI("Telem", "sending imu");
 
     //Throttle PRY x v a u  
@@ -79,29 +88,27 @@ void telemetry_task(){
     bl_comm.sendTelemetry();
     #endif
 
-    vTaskDelete(bl_telem_handle_t); // タスクを削除します。
+    // 共有ハンドル経由だと後発タスクを消す恐れがあるので、自分自身(NULL)を削除する
+    bl_telem_busy = false;
+    vTaskDelete(NULL);
 }
 // 新たな定期的にスマホに送信するタイマーコールバック関数を定義します。
 void bl_telemetry_callback(TimerHandle_t xTimer)
 {
-    if(bl_comm.isClientConnecting()){
+    // 前回の送信が終わっていなければ今回はスキップ（多重起動防止）
+    if(bl_comm.isClientConnecting() && !bl_telem_busy){
         // 新たなタスクを作成してメッセージを送信します。
 
         //ESP_LOGI("Timer", "telemetring");
-        xTaskCreate( (TaskFunction_t)telemetry_task, "TelemetryTask", 4096, NULL, 1, &bl_telem_handle_t);
+        bl_telem_busy = true;
+        if (xTaskCreate(telemetry_task, "TelemetryTask", 4096, NULL, 1, NULL) != pdPASS) {
+            bl_telem_busy = false;
+        }
     }
 }
-// IMU用タイマーコールバック関数を定義します。
-void IRAM_ATTR timer_callback(TimerHandle_t xTimer)
+// 制御入力を計算してサーボに反映する
+static void apply_control()
 {
-    //ESP_LOGI("Timer", "reading.. imu");
-    motion.update();
-}
-
-// 制御用タイマーコールバック関数を定義します。
-void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
-{
-    //ESP_LOGI("Timer", "calculating.. u");
     motion.calcU();
     if(motion.ControlMethod != 0){
         //Thrust->setPWM((motion.u(0, 0)));
@@ -111,11 +118,71 @@ void IRAM_ATTR timerU_callback(TimerHandle_t xTimer)
         Servo4->setPWM(motion.u(4, 0));
     }
 }
-// 制御用タイマーコールバック関数を定義します。
-void IRAM_ATTR timerKF_callback(TimerHandle_t xTimer)
+
+// 制御ループの負荷計測（app_mainで定期的にログ出力する）
+static volatile uint32_t ctrl_overrun_count = 0;  // 処理が間に合わず取りこぼした周期数
+static volatile uint32_t ctrl_exec_max_us = 0;    // 1周期の最大処理時間
+
+// gptimerのアラーム割り込み。制御タスクを起こすだけ
+static bool IRAM_ATTR control_timer_on_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
-    //ESP_LOGI("Timer", "calculating.. u");
-    motion.filterUpdate();
+    BaseType_t high_task_woken = pdFALSE;
+    vTaskNotifyGiveFromISR((TaskHandle_t)user_ctx, &high_task_woken);
+    return high_task_woken == pdTRUE;
+}
+
+static void start_control_timer(TaskHandle_t task)
+{
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1MHz, 1us per tick
+        .intr_priority = 0,
+        .flags = {},
+    };
+    gptimer_handle_t timer = NULL;
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &timer));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = control_timer_on_alarm,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(timer, &cbs, task));
+    ESP_ERROR_CHECK(gptimer_enable(timer));
+
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = CONTROL_BASE_PERIOD_US,
+        .reload_count = 0,
+        .flags = {.auto_reload_on_alarm = true},
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(timer, &alarm_config));
+    ESP_ERROR_CHECK(gptimer_start(timer));
+}
+
+static void sensor_controller_init(float IMU_sampleFreq, float Cont_freq);
+
+// IMU読み出し・KF・制御計算を基本周期ごとに順番に実行するタスク
+static void control_task(void* arg)
+{
+    // I2Cとgptimerの割り込みをこのタスクのコアに確保するため、初期化はタスク内で行う
+    sensor_controller_init(1e6f / CONTROL_BASE_PERIOD_US, 1e6f / (CONTROL_BASE_PERIOD_US * CONTROL_U_DIV));
+    start_control_timer(xTaskGetCurrentTaskHandle());
+
+    uint32_t u_count = 0;
+    for(;;){
+        // 通知が2以上溜まっていたら前周期の処理が間に合っていない
+        uint32_t pending = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (pending > 1) ctrl_overrun_count = ctrl_overrun_count + (pending - 1);
+
+        int64_t t0 = esp_timer_get_time();
+        motion.update();
+        motion.filterUpdate();
+        if (++u_count >= CONTROL_U_DIV) {
+            u_count = 0;
+            apply_control();
+        }
+        uint32_t exec_us = (uint32_t)(esp_timer_get_time() - t0);
+        if (exec_us > ctrl_exec_max_us) ctrl_exec_max_us = exec_us;
+    }
 }
 
 
@@ -128,12 +195,19 @@ static void set_servo_pwm(uint8_t servo_id, float pwm) {
 }
 
 // PID設定関数
-static void set_pid_gain(void* pid_ptr, uint8_t gain_type, const float* value) {
+static void set_pid_gain(void* pid_ptr, uint8_t gain_type, const uint8_t* value) {
     switch(gain_type) {
         case 0: memcpy(&((PID*)pid_ptr)->Kp, value, sizeof(float)); break;
         case 1: memcpy(&((PID*)pid_ptr)->Ki, value, sizeof(float)); break;
         case 2: memcpy(&((PID*)pid_ptr)->Kd, value, sizeof(float)); break;
     }
+}
+
+// 受信バッファ上のfloatはアライメントされていないのでmemcpyで読む
+static float read_float(const uint8_t* p) {
+    float v;
+    memcpy(&v, p, sizeof(float));
+    return v;
 }
 
 static void command_cb(uint8_t *msg, uint16_t msglen){
@@ -154,6 +228,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             }
             break;
         case 10: {
+            if (msglen < 1+4) break;
             uint8_t valServo[4];
             memcpy(valServo, &msg[1], sizeof(uint8_t)*4);
             for(int i = 0; i < 4; i++) {
@@ -162,28 +237,30 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         }
         case 11:
-            if(msglen >= 6) set_pid_gain(&motion.pitch_pid, msg[1], (float*)&msg[2]);
+            if(msglen >= 6) set_pid_gain(&motion.pitch_pid, msg[1], &msg[2]);
             break;
         case 12:
-            if(msglen >= 6) set_pid_gain(&motion.roll_pid, msg[1], (float*)&msg[2]);
+            if(msglen >= 6) set_pid_gain(&motion.roll_pid, msg[1], &msg[2]);
             break;
         case 13:
-            if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], (float*)&msg[2]);
+            if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], &msg[2]);
             break;
 
         //PID目標値の一括セット
         case 14:
-            motion.setPRYtarget(*(float*)&msg[1], *(float*)&msg[2],*(float*)&msg[3]);
+            if (msglen >= 1+sizeof(float)*3) {
+                motion.setPRYtarget(read_float(&msg[1]), read_float(&msg[1+sizeof(float)]), read_float(&msg[1+sizeof(float)*2]));
+            }
             break;
         //PID目標値の個別セット
         case 15:
-            motion.pitch_pid.target = *(float*)&msg[1];
+            if (msglen >= 1+sizeof(float)) motion.pitch_pid.target = read_float(&msg[1]);
             break;
         case 16:
-            motion.roll_pid.target = *(float*)&msg[1];
+            if (msglen >= 1+sizeof(float)) motion.roll_pid.target = read_float(&msg[1]);
             break;
         case 17:
-            motion.yaw_pid.target = *(float*)&msg[1];
+            if (msglen >= 1+sizeof(float)) motion.yaw_pid.target = read_float(&msg[1]);
             break;
         default: {   
             ESP_LOGI(TAG, "Unknown command.");
@@ -255,7 +332,7 @@ static void pwm_init(){
     init_servo(&Servo1, GPIO_NUM_4, operServo, 900, 2100, 50.0f);
     init_servo(&Servo2, GPIO_NUM_16, operServo, 900, 2100, 50.0f);
     init_servo(&Servo3, GPIO_NUM_22, operServo2, 900, 2100, 50.0f);
-    init_servo(&Servo4, GPIO_NUM_17, operServo2, 900, 2100, .0f);
+    init_servo(&Servo4, GPIO_NUM_17, operServo2, 900, 2100, 50.0f);
 
     if(Thrust == NULL || Servo1 == NULL || Servo2 == NULL || Servo3 == NULL || Servo4 == NULL) {
         ESP_LOGE(TAG, "Motor or Servo creation failed");
@@ -296,17 +373,18 @@ extern "C" void app_main(void)
     bl_comm.setCommandCb(command_cb);
     ESP_ERROR_CHECK(bl_comm.begin());
 
-    const int IMU_sampling_ms = 2;
-    const int CalcU_sampling_ms = 4;
-    const int CalcKF_sampling_ms = 2;
-    sensor_controller_init(1000/IMU_sampling_ms, 1000/CalcU_sampling_ms);
-    // タイマーを作成し、コールバック関数を設定します。
-    create_and_start_timer("IMU Timer", IMU_sampling_ms, timer_callback, 1);
-    create_and_start_timer("CalcU Timer", CalcU_sampling_ms, timerU_callback, 1);
-    create_and_start_timer("CalcKF Timer", CalcKF_sampling_ms, timerKF_callback, 1);
+    // IMU・KF・制御は専用タスクで回す（センサ初期化もタスク内で行う）
+    if (xTaskCreatePinnedToCore(control_task, "control", 4096, NULL, CONTROL_TASK_PRIO, NULL, CONTROL_TASK_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create control task.");
+    }
     create_and_start_timer("BL Telemetry", 200, bl_telemetry_callback, 2);
 
-    // タスクをブロックします。
-    vTaskDelay(portMAX_DELAY);
+    // 制御ループの負荷を定期的にログ出力する
+    for(;;){
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        ESP_LOGI(TAG, "control loop: max exec %" PRIu32 " us / period %d us, overrun %" PRIu32,
+                 ctrl_exec_max_us, CONTROL_BASE_PERIOD_US, ctrl_overrun_count);
+        ctrl_exec_max_us = 0;
+    }
 }
 
