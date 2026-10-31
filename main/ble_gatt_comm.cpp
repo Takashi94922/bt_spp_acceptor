@@ -176,6 +176,7 @@ uint8_t Ble_comm::adv_config_done = 0;
 float *Ble_comm::xhat_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_comm::controlGain, *Ble_comm::q;
 
 prepare_type_env_t *Ble_comm::env_list[5];
+void (*Ble_comm::disconnect_cb)() = nullptr;
 
 gatts_profile_inst Ble_comm::profile_tab[PROFILE_NUM] = {
     {
@@ -445,6 +446,9 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
         case ESP_GATTS_DISCONNECT_EVT:{
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, reason = 0x%x", param->disconnect.reason);
             Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id = 0xFFFF; // または -1
+            if (Ble_comm::disconnect_cb) {
+                Ble_comm::disconnect_cb();
+            }
             esp_ble_gap_start_advertising(const_cast<esp_ble_adv_params_t*>(&Ble_comm::adv_params));
             break;
         }

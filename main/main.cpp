@@ -47,6 +47,11 @@
 #define TELEMETRY_TASK_CORE    0
 #define TELEMETRY_TASK_PRIO    2
 
+// 緊急時（BLE切断・ハートビート途絶）の設定
+#define EMERGENCY_THROTTLE     30.0f  // 緊急時のスロットル上限[%]。0だと墜落するので降下できる推力を残す
+#define HEARTBEAT_TIMEOUT_MS   1000   // この時間コマンドが届かなければ緊急動作
+#define CMD_HEARTBEAT          18     // モニターからの生存通知コマンド（中身は使わない）
+
 #define TAG "ESP_SPP_DRONE"
 
 //#define COMM_MODE_BT_SPP
@@ -81,6 +86,50 @@ static void apply_control()
         Servo2->setPWM(motion.u(2, 0));
         Servo3->setPWM(motion.u(3, 0));
         Servo4->setPWM(motion.u(4, 0));
+    }
+}
+
+// ---- 緊急時の制御動作 ----
+// 最後にコマンドを受信した時刻。ハートビートの途絶判定に使う
+static volatile TickType_t last_command_tick = 0;
+// モニターからハートビートを受信したら監視を有効にする（ハートビート非対応のモニターで誤動作しないように）
+static volatile bool heartbeat_armed = false;
+// 緊急動作済み。次にコマンドを受信するまで再実行しない
+static volatile bool failsafe_active = false;
+
+// 緊急時の制御動作。スロットルをEMERGENCY_THROTTLEまで下げ、姿勢制御は継続する。
+// 地上で止まっている機体を回し始めないよう、現在値より上げることはしない
+static void emergency_action(const char* reason)
+{
+    failsafe_active = true;
+    float current = Thrust->getPercent();
+    if (current > EMERGENCY_THROTTLE) {
+        Thrust->setPWM(EMERGENCY_THROTTLE);
+    }
+    ESP_LOGW(TAG, "emergency (%s): throttle %.0f%% -> %.0f%%", reason, current, Thrust->getPercent());
+}
+
+// コマンド受信のたびに呼ぶ。ハートビートの時刻を更新し、緊急動作を解除する
+static void on_command_received(uint8_t cmd)
+{
+    last_command_tick = xTaskGetTickCount();
+    if (cmd == CMD_HEARTBEAT) heartbeat_armed = true;
+    failsafe_active = false;
+}
+
+// BLE切断時（BLEスタックのタスクから呼ばれる）
+static void on_ble_disconnected()
+{
+    heartbeat_armed = false; // 再接続後は再びハートビートを受けてから監視する
+    emergency_action("BLE disconnected");
+}
+
+// テレメトリタスクから定期的に呼ぶ。ハートビートが途絶えていたら緊急動作
+static void check_heartbeat()
+{
+    if (!heartbeat_armed || failsafe_active || !bl_comm.isClientConnecting()) return;
+    if ((xTaskGetTickCount() - last_command_tick) > pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS)) {
+        emergency_action("heartbeat timeout");
     }
 }
 
@@ -177,6 +226,7 @@ static float read_float(const uint8_t* p) {
 
 static void command_cb(uint8_t *msg, uint16_t msglen){
     if (msglen < 2) return;
+    on_command_received(msg[0]);
     ESP_LOG_BUFFER_HEX_LEVEL(TAG, msg, msglen, ESP_LOG_DEBUG);
     
     switch (msg[0]) {
@@ -226,6 +276,9 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         case 17:
             if (msglen >= 1+sizeof(float)) motion.yaw_pid.target = read_float(&msg[1]);
+            break;
+        // ハートビート（受信時刻の更新はon_command_receivedで済んでいる）
+        case CMD_HEARTBEAT:
             break;
         default: {   
             ESP_LOGI(TAG, "Unknown command.");
@@ -313,6 +366,8 @@ static void telemetry_task(void* arg)
     for(;;){
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
 
+        check_heartbeat();
+
         if (bl_comm.isClientConnecting()) {
             //Throttle PRY x v a u
             #ifdef COMM_MODE_BT_SPP
@@ -364,6 +419,9 @@ extern "C" void app_main(void)
     pwm_init();
     
     bl_comm.setCommandCb(command_cb);
+    #ifndef COMM_MODE_BT_SPP
+    bl_comm.setDisconnectCb(on_ble_disconnected);
+    #endif
     ESP_ERROR_CHECK(bl_comm.begin());
 
     // IMU・KF・制御は専用タスクで回す（センサ初期化もタスク内で行う）

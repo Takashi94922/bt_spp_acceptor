@@ -129,6 +129,10 @@ public:
     void setCommandCb(void (*command_cb_p)(uint8_t* data, uint16_t len)) {
         Ble_comm::command_cb = command_cb_p;
     }
+    // 切断時に呼ぶ関数（BLEスタックのタスクから呼ばれるので重い処理はしないこと）
+    void setDisconnectCb(void (*disconnect_cb_p)()) {
+        Ble_comm::disconnect_cb = disconnect_cb_p;
+    }
     static bool isConnecting, isWriting;
     void sendMsg(char *msg, unsigned char len);
     void sendTelemetry();
@@ -180,6 +184,7 @@ private:
     static float *controlGain;
     static float *q;
     static void (*command_cb)(uint8_t* data, uint16_t len);
+    static void (*disconnect_cb)();
 
     static prepare_type_env_t *env_list[5];
 };
