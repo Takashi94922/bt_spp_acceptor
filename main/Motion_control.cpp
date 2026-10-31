@@ -239,6 +239,7 @@ void Motion_control::update(){
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
+	getPRYrate(PRY_rate);
 	getQuaternion(q.data);
 
 	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
@@ -289,9 +290,9 @@ void Motion_control::calcU(){
 	else if (ControlMethod == 2) {
 		// PID制御を適用
 		float xsrc[3];
-		xsrc[0] = pitch_pid.calculatePID(PRY_value[0]);
-		xsrc[1] = roll_pid.calculatePID(PRY_value[1]);
-		xsrc[2] = yaw_pid.calculatePID(PRY_value[2]);
+		xsrc[0] = pitch_pid.calculatePID(PRY_value[0], PRY_rate[0]);
+		xsrc[1] = roll_pid.calculatePID(PRY_value[1], PRY_rate[1]);
+		xsrc[2] = yaw_pid.calculatePID(PRY_value[2], PRY_rate[2]);
 
 		#ifdef FLIGHT_MODE_X
 			// 制御出力を使用して次の処理を実行
@@ -310,14 +311,11 @@ void Motion_control::calcU(){
 }
 
 // PID制御計算関数
-float PID::calculatePID(float current) {
+float PID::calculatePID(float current, float rate) {
     float error = target - current; // 誤差
-    if (first) {                     // reset直後は前回の誤差がないので微分項を0にする
-        prev_error = error;
-        first = false;
-    }
-    float derivative = (error - prev_error) / dt_cont; // 微分項
-    prev_error = error;         // 前回の誤差を更新
+    // 微分項。目標値を一定とみなし d(error)/dt = -rate とする。
+    // 角度の差分と違って遅れとノイズがなく、目標値を変えても出力が跳ねない
+    float derivative = -rate;
 
     // 積分項。Ki*integral が ±i_limit を超えないように積分値を制限する（アンチワインドアップ）
     if (fabsf(Ki) > 1e-6f) {
@@ -381,6 +379,30 @@ void Motion_control::getPRY(float* retbuf){
     retbuf[0] = flt_pitch;
     retbuf[1] = flt_roll;
     retbuf[2] = flt_yaw;
+}
+
+// PRY_value の変化率[rad/s]をジャイロ（バイアス補正後）から求める。
+// 機体座標の角速度（機体x=IMU z、機体y=IMU x、機体z=IMU y、IMU_2_body と同じ）を
+// ZYXオイラー角の変化率に直し、getPRY と同じ並びと符号にする
+void Motion_control::getPRYrate(float* retbuf){
+	float p = g_imu(2, 0); // 機体x軸まわり
+	float q = g_imu(0, 0); // 機体y軸まわり
+	float r = g_imu(1, 0); // 機体z軸まわり
+
+	float body[3]; // roll pitch yaw
+	madgwick.retBodyAngles(body);
+	float sr = sinf(body[0]), cr = cosf(body[0]);
+	float cp = cosf(body[1]);
+	if (fabsf(cp) < 0.01f) cp = (cp < 0.0f) ? -0.01f : 0.01f; // ピッチ±90°付近の発散を防ぐ
+	float tp = sinf(body[1]) / cp;
+
+	float roll_rate  = p + (q * sr + r * cr) * tp;
+	float pitch_rate = q * cr - r * sr;
+	float yaw_rate   = (q * sr + r * cr) / cp;
+
+	retbuf[0] = pitch_rate;
+	retbuf[1] = roll_rate;
+	retbuf[2] = -yaw_rate; // getPRY のヨーは符号反転している
 }
 
 void Motion_control::setPRYtarget(float pitch_target, float roll_target, float yaw_target){

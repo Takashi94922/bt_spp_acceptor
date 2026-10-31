@@ -9,13 +9,12 @@
 struct PID {
 	float Kp, Ki, Kd;
 	float dt_cont;
-	float prev_error;
 	float integral;
 	float target; // 目標値（セットポイント）
 	float i_limit = 20.0f; // 積分項の出力の上限[%]（アンチワインドアップ）
-	bool first = true;     // reset直後。初回は微分項を計算しない
-	float calculatePID(float current);
-	void reset() { integral = 0.0f; prev_error = 0.0f; first = true; }
+	// current: 現在の角度[rad]、rate: その角度の変化率[rad/s]（ジャイロから計算）
+	float calculatePID(float current, float rate);
+	void reset() { integral = 0.0f; }
 };
 class Motion_control{
 	LSM9DS1 imu;
@@ -106,9 +105,10 @@ public:
 
 		// PID制御用のインスタンス
 		//吸い込み力と釣り合わせるためpitchだけちょっと後ろに傾ける
-		pitch_pid = {7.2f, 0.0f, 0.54f, 0.0f, 0.0f, 0.0, -0.1f};
-		roll_pid = {9.60f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0, 0.0f};
-		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0, 0.0f};
+		//{Kp, Ki, Kd, dt_cont, integral, target}
+		pitch_pid = {7.2f, 0.0f, 0.54f, 0.0f, 0.0f, -0.1f};
+		roll_pid = {9.60f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f};
+		yaw_pid = {.0f, .0f, 0.00f, 0.0f, 0.0f, 0.0f};
 	}
 
 	static constexpr float gravity_c = 9.80665;
@@ -166,6 +166,7 @@ public:
 	//単位はrad
 	float PRY_value[3] = {0};
 	float PRY_offset[3] = {0};  // 初期角度オフセット
+	float PRY_rate[3] = {0};    // PRY_value の変化率[rad/s]（ジャイロから計算、LPFなし）。PIDのD項に使う
 	dspm::Mat B, Q, R, KC, KPID;
 	float *KCsrc = KC.data;
 	dspm::Mat P = dspm::Mat::eye(6);
@@ -188,6 +189,7 @@ public:
     void calcU();
 	//単位はrad
     void getPRY(float *retbuf);
+	void getPRYrate(float *retbuf);
 	void getQuaternion(float* retbuf);
 	void setPRYtarget(float pitch_target, float roll_target, float yaw_target);
 	void setPIDTarget(uint8_t axis, float target);            // axis 0:pitch 1:roll 2:yaw

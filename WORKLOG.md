@@ -260,3 +260,15 @@
 - C10: ジャイロ ±2000→±500dps、加速度 ±16→±8g（±4g は振動で飽和するおそれがあるため ±8g にした）
 - C11: ゲイン・目標値・制御モード・KC の書き換えを `Motion_control` の set 系関数（spinlock）経由にし、`calcU()` の計算中は排他。BLE の ContGain_Upd 書き込みも `setGainUpdateCb` 経由で同じ関数を通す
 - ビルド成功（新しい警告なし）
+
+## 2026-10-31 コミット
+- 姿勢推定・制御の改善（C1, C2, C4, C5, C8, C10, C11）をコミット（675da35）
+
+## 2026-10-31 C7（D項をジャイロの角速度で計算）開始
+
+### 結果（2026-10-31）C7（未コミット、実機未確認）
+- `Motion_control::getPRYrate()` を追加。バイアス補正後のジャイロを機体座標（機体x=IMU z、y=IMU x、z=IMU y）に直し、ZYX オイラー角の変化率に変換して `PRY_rate`（PRY_value と同じ並び・符号、LPFなし）に入れる
+- `PID::calculatePID(current, rate)`: 微分項を `-rate` に（目標値一定とみなした d(error)/dt）。角度差分・`prev_error`・リセット直後の特別扱いは不要になったので削除。PID の初期化リストも `{Kp, Ki, Kd, dt_cont, integral, target}` に
+- Python で検算: 任意の姿勢（IMU roll 50〜130°、pitch ±40°、任意ヨー）と角速度で、PRY を数値微分した値と `PRY_rate` の式が一致（誤差 1e-4 rad/s 以下、数値微分の誤差）
+- Kd はほぼそのまま使える単位（従来もLPF後の角度の微分）。ただし従来は LPF 20Hz と差分の遅れがあったので、効き方は強く感じるはず
+- ビルド成功
