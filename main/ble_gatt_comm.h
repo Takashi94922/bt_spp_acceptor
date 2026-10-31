@@ -56,6 +56,10 @@ enum
     IDX_CHAR_F,
     IDX_CHAR_VAL_F,
     IDX_CHAR_CFG_F,
+
+    IDX_CHAR_G,
+    IDX_CHAR_VAL_G,
+    IDX_CHAR_CFG_G,
     IDX_NB,
 };
 typedef struct {
@@ -95,6 +99,14 @@ constexpr uint16_t GATTS_CHAR_UUID_contU_TelemWrite = 0xFF03;
 constexpr uint16_t GATTS_CHAR_UUID_ContGain_Upd = 0xFF04;
 constexpr uint16_t GATTS_CHAR_UUID_Command = 0xFF05;
 constexpr uint16_t GATTS_CHAR_UUID_Quaternion_Telem = 0xFF06;
+constexpr uint16_t GATTS_CHAR_UUID_LoopStats_Telem = 0xFF07;
+
+// 0xFF07で送る制御ループ負荷（リトルエンディアンのuint32 x3）
+typedef struct {
+    uint32_t max_exec_us; // 直近の集計区間での1周期最大処理時間[us]
+    uint32_t overrun;     // 起動からの取りこぼし周期数（累計）
+    uint32_t period_us;   // 制御ループの基本周期[us]
+} loop_stats_t;
 
 constexpr uint16_t primary_service_uuid         = ESP_GATT_UUID_PRI_SERVICE;
 constexpr uint16_t character_declaration_uuid   = ESP_GATT_UUID_CHAR_DECLARE;
@@ -110,7 +122,9 @@ public:
     esp_err_t begin();
 
     bool isClientConnecting(){
-        return (profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE);
+        // gatts_ifは登録後ずっと有効なので、接続状態はconn_idで判定する
+        return (profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
+                profile_tab[PROFILE_APP_IDX].conn_id != 0xFFFF);
     }
     void setCommandCb(void (*command_cb_p)(uint8_t* data, uint16_t len)) {
         Ble_comm::command_cb = command_cb_p;
@@ -118,6 +132,7 @@ public:
     static bool isConnecting, isWriting;
     void sendMsg(char *msg, unsigned char len);
     void sendTelemetry();
+    void sendLoopStats(const loop_stats_t &stats);
 private:
     // BLE advertising/scan data
     static constexpr uint8_t RAW_ADV_DATA[21] = {
@@ -154,7 +169,8 @@ private:
     static gatts_profile_inst profile_tab[PROFILE_NUM];
     
     static esp_gatts_attr_db_t gatt_db[IDX_NB];
-    static notify_target_t notify_targets[6];
+    static notify_target_t notify_targets[7];
+    static loop_stats_t loop_stats;
     static notify_target_t* getNotifyTargetByCfgHandle(uint16_t cfg_handle);
     static notify_target_t* getNotifyTargetByValHandle(uint16_t val_handle);
     // BLE values and buffers

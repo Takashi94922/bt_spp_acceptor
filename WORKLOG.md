@@ -81,3 +81,56 @@
 ## 2026-10-31 コミット
 - #1〜#7, #10 と、作業開始前からあった未コミット変更（getPRY の一次LPF、Servo4 中心値の修正）をまとめてコミット
 - `sdkconfig.old`（menuconfig のバックアップ）と `.clangd`（ローカルのエディタ設定）は対象外
+
+## 2026-10-31 13:25 改善 E2〜E5（ESP側）, M1〜M4・M7・M8（モニター側）開始
+
+- ESP側: ブランチ `vert`、起点コミット `f71af46`
+- モニター側: `D:\YsProject\drone\DroneMonitor`（別リポジトリ）、起点コミット `dd73d8a`
+  - 開始時点の未コミット変更（ユーザー作業中、そのまま保持）: `HomeView.xaml(.cs)`（緊急停止ボタン追加、送信周期 16→50ms 等）、`AndroidGamepadHandler.cs`、`WindowsGamepadHandler.cs`
+
+### 対象
+| # | 内容 | 側 |
+|---|---|---|
+| E2 | テレメトリを Core 0 固定・低優先度の常駐タスク1本に（周期 200ms のまま、毎回のタスク生成をやめる） | ESP |
+| E3 | 制御ループ負荷（max exec / overrun / 周期）を送るキャラクタリスティック 0xFF07 を追加、1秒ごとに送信 | ESP |
+| E4 | `isClientConnecting()` が切断後も true を返すのを修正 | ESP |
+| E5 | BLE 受信ごとの HEX ログ出力をやめる | ESP |
+| M1 | `SendSliderValueAsync` で 2 バイト配列に float を書き込んで例外になるバグを修正 | モニター |
+| M2 | BLE 書き込みを1本のキューに直列化（タイマーの再入防止も） | モニター |
+| M3 | 緊急停止ボタンでスロットル0・制御モード0を即時送信 | モニター |
+| M4 | 制御ループ負荷の表示欄を追加 | モニター |
+| M7 | `ControlDataPage` を `ControlDataView` をホストする薄いラッパーにして重複を解消 | モニター |
+| M8 | Shift-JIS のファイル（BleService.cs ほか）を UTF-8 (BOM付き) に統一 | モニター |
+
+### 結果（2026-10-31）
+#### ESP側（未コミット）
+- E2: テレメトリを xTimer＋毎回のタスク生成から、常駐タスク `telemetry_task`（Core 0、優先度 2、`vTaskDelayUntil` で 200ms 周期）に変更。未使用になった `create_and_start_timer` は削除
+- E3: キャラクタリスティック 0xFF07（Read/Notify、`loop_stats_t` = uint32 x3: max_exec_us, overrun累計, period_us）を追加。テレメトリタスクが1秒ごとに集計して送信。シリアルへのログは5秒ごと
+- E4: `isClientConnecting()` を `conn_id != 0xFFFF` でも判定するよう修正
+- E5: BLE 書き込み受信時と `command_cb` の HEX ログを DEBUG レベルに変更（既定の INFO では出ない）
+- ビルド確認済み（ESP-IDF 5.4.1 / ESP32）、新規の警告なし
+
+#### モニター側（未コミット、`D:\YsProject\drone\DroneMonitor`）
+- M8: Shift-JIS だった `BleService.cs`, `Platforms/Android/JoystickView.xaml.cs`, `Views/DualPage.xaml.cs`, `Views/ControlDataPage.xaml.cs` を UTF-8 (BOM付き) に変換（中身はコメントの文字コードのみ）
+- M2: `BleService.WriteAsync(key, data)` を追加し、書き込みと通知の開始・停止を `SemaphoreSlim` で直列化。`HomeView` の定期送信は前回の送信中ならスキップ。`ControlDataView` の書き込みもすべて経由させた
+- M1: PID 目標値の送信で専用の 5 バイト配列を使うよう修正。定期送信の例外は捕捉してログに出す
+- M3: 緊急停止ボタンで、定期送信の残りを打ち切ったうえでスロットル0（`00 00`）と制御モード0（`05 00`）を即時送信。`BleService.IsControlBySelf` の変更を `ControlStateChanged` イベントで通知し、制御画面のボタン表示も連動
+- M4: 制御画面の最下段に負荷表示を追加（最大処理時間 / 周期 / 使用率 / 取りこぼし）。取りこぼしが増えたか使用率 80% 以上で赤表示。0xFF07 が無い古いファームウェアでは「未対応」と表示
+- M7: `ControlDataPage` を `ControlDataView` をホストするだけのラッパーに変更（重複していた約 250 行を削除）
+- Windows ターゲットでビルド確認済み（.NET SDK 9.0.302、新規の警告なし）。Android ターゲットは maui-android ワークロードが無くビルド未確認
+- 実機（ESP・スマホ）での動作は未確認
+
+#### 変更（2026-10-31）
+- M3 の緊急停止時スロットルを 0% → 30% に変更（0% だと墜落するため）。`HomeView.xaml.cs` の定数 `EMERGENCY_THROTTLE` で調整可能。制御モード0の送信はそのまま
+- Windows ターゲットでビルド確認済み
+- 緊急停止で制御モード0（姿勢制御オフ）を送るのをやめた。推力を残して降下させるため、姿勢制御は継続する（ユーザー判断）。Windows ターゲットでビルド確認済み
+
+#### 実機確認（2026-10-31）
+- ESP・モニターとも動作を確認（ユーザー）
+- 制御ループ負荷: 最大処理時間 1058µs / 周期 2000µs（約53%）、取りこぼし 0
+  - 見積もり（約 0.5ms）より大きい。磁気センサを読む周期（6回に1回、I2C 3回）や I2C ドライバのオーバーヘッドが最大値に効いていると考えられる
+  - このままでは IMU 周期 1ms（1kHz）化は不可。行うなら SPI 化や読み出しのさらなる削減が必要
+
+## 2026-10-31 コミット
+- ESP側（このリポジトリ）: E2〜E5 をコミット。`sdkconfig.old` と `.clangd` は対象外
+- モニター側（`D:\YsProject\drone\DroneMonitor`）: M1〜M4・M7・M8、緊急停止スロットル30%（制御継続）と、作業開始前からあった未コミット変更（緊急停止ボタン追加、送信周期 16→50ms、ゲームパッド処理の変更）をまとめてコミット

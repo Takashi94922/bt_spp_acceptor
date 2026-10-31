@@ -41,6 +41,12 @@
 #define CONTROL_TASK_CORE      1      // Bluedroid/BTコントローラはCore 0固定なのでCore 1で回す
 #define CONTROL_TASK_PRIO      20
 
+// テレメトリ設定。監視用途なので周期は控えめにし、BTと同じCore 0で低優先度に回す
+#define TELEMETRY_PERIOD_MS    200
+#define LOOP_STATS_PERIOD_MS   1000   // 制御ループ負荷の集計・送信周期
+#define TELEMETRY_TASK_CORE    0
+#define TELEMETRY_TASK_PRIO    2
+
 #define TAG "ESP_SPP_DRONE"
 
 //#define COMM_MODE_BT_SPP
@@ -65,47 +71,6 @@ Motion_control motion;
     );
 #endif
 
-// テレメトリタスク実行中フラグ。タスク生成前に立て、タスク終了時に下ろす
-static volatile bool bl_telem_busy = false;
-//blでIMUデータを送信するのをノンブロッキングでやるためのタスク
-void telemetry_task(void* arg){
-    //ESP_LOGI("Telem", "sending imu");
-
-    //Throttle PRY x v a u  
-    #ifdef COMM_MODE_BT_SPP
-    float msg[] = {Thrust->getPercent(),
-        motion.PRY_value[0], motion.PRY_value[1], motion.PRY_value[2],
-        motion.x(0, 0), motion.x(1, 0), motion.x(2, 0),
-        motion.xhat(3, 0), motion.xhat(4, 0), motion.xhat(5, 0),
-        motion.xhat(0, 0), motion.xhat(1, 0), motion.xhat(2, 0),
-        motion.u(0, 0), motion.u(1, 0), motion.u(2, 0), motion.u(3, 0), motion.u(4, 0)
-    };
-        
-    //ESP_LOGI(TAG, "msg len %d", sizeof(msg));
-    bl_comm.sendMsg((char *)msg, sizeof(msg));
-    #else
-    //ESP_LOGI(TAG, "send Telemetring");
-    bl_comm.sendTelemetry();
-    #endif
-
-    // 共有ハンドル経由だと後発タスクを消す恐れがあるので、自分自身(NULL)を削除する
-    bl_telem_busy = false;
-    vTaskDelete(NULL);
-}
-// 新たな定期的にスマホに送信するタイマーコールバック関数を定義します。
-void bl_telemetry_callback(TimerHandle_t xTimer)
-{
-    // 前回の送信が終わっていなければ今回はスキップ（多重起動防止）
-    if(bl_comm.isClientConnecting() && !bl_telem_busy){
-        // 新たなタスクを作成してメッセージを送信します。
-
-        //ESP_LOGI("Timer", "telemetring");
-        bl_telem_busy = true;
-        if (xTaskCreate(telemetry_task, "TelemetryTask", 4096, NULL, 1, NULL) != pdPASS) {
-            bl_telem_busy = false;
-        }
-    }
-}
 // 制御入力を計算してサーボに反映する
 static void apply_control()
 {
@@ -212,7 +177,7 @@ static float read_float(const uint8_t* p) {
 
 static void command_cb(uint8_t *msg, uint16_t msglen){
     if (msglen < 2) return;
-    ESP_LOG_BUFFER_HEX(TAG, msg, msglen);
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, msg, msglen, ESP_LOG_DEBUG);
     
     switch (msg[0]) {
         case 0 ... 4:
@@ -339,24 +304,52 @@ static void pwm_init(){
     }
 }
 
-// タイマー生成と開始を一括で行う関数を追加
-TimerHandle_t create_and_start_timer(const char* timer_name, int period_ms, 
-                                      TimerCallbackFunction_t callback_func, int timer_id = 0)
+// スマホへの定期送信タスク。制御(Core 1)に影響しないようCore 0・低優先度で常駐させる
+static void telemetry_task(void* arg)
 {
-    TimerHandle_t timer = xTimerCreate(timer_name, pdMS_TO_TICKS(period_ms), pdTRUE, 
-                                       (void*)(intptr_t)timer_id, callback_func);
-    if (timer == NULL) {
-        ESP_LOGE(TAG, "Failed to create %s.", timer_name);
-        return NULL;
-    }
+    TickType_t last_wake = xTaskGetTickCount();
+    uint32_t stats_count = 0;
+    uint32_t log_count = 0;
+    for(;;){
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
 
-    if (xTimerStart(timer, 0) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to start %s.", timer_name);
-        return NULL;
-    }
+        if (bl_comm.isClientConnecting()) {
+            //Throttle PRY x v a u
+            #ifdef COMM_MODE_BT_SPP
+            float msg[] = {Thrust->getPercent(),
+                motion.PRY_value[0], motion.PRY_value[1], motion.PRY_value[2],
+                motion.x(0, 0), motion.x(1, 0), motion.x(2, 0),
+                motion.xhat(3, 0), motion.xhat(4, 0), motion.xhat(5, 0),
+                motion.xhat(0, 0), motion.xhat(1, 0), motion.xhat(2, 0),
+                motion.u(0, 0), motion.u(1, 0), motion.u(2, 0), motion.u(3, 0), motion.u(4, 0)
+            };
+            bl_comm.sendMsg((char *)msg, sizeof(msg));
+            #else
+            bl_comm.sendTelemetry();
+            #endif
+        }
 
-    ESP_LOGI(TAG, "%s started successfully.", timer_name);
-    return timer;
+        // 制御ループの負荷はLOOP_STATS_PERIOD_MSごとに集計して送る
+        if (++stats_count < LOOP_STATS_PERIOD_MS / TELEMETRY_PERIOD_MS) continue;
+        stats_count = 0;
+
+        loop_stats_t stats = {
+            .max_exec_us = ctrl_exec_max_us,
+            .overrun = ctrl_overrun_count,
+            .period_us = CONTROL_BASE_PERIOD_US,
+        };
+        ctrl_exec_max_us = 0;
+        #ifndef COMM_MODE_BT_SPP
+        bl_comm.sendLoopStats(stats);
+        #endif
+
+        // シリアルにも5回に1回だけ出す
+        if (++log_count >= 5) {
+            log_count = 0;
+            ESP_LOGI(TAG, "control loop: max exec %" PRIu32 " us / period %" PRIu32 " us, overrun %" PRIu32,
+                     stats.max_exec_us, stats.period_us, stats.overrun);
+        }
+    }
 }
 
 extern "C" void app_main(void)
@@ -377,14 +370,8 @@ extern "C" void app_main(void)
     if (xTaskCreatePinnedToCore(control_task, "control", 4096, NULL, CONTROL_TASK_PRIO, NULL, CONTROL_TASK_CORE) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create control task.");
     }
-    create_and_start_timer("BL Telemetry", 200, bl_telemetry_callback, 2);
-
-    // 制御ループの負荷を定期的にログ出力する
-    for(;;){
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        ESP_LOGI(TAG, "control loop: max exec %" PRIu32 " us / period %d us, overrun %" PRIu32,
-                 ctrl_exec_max_us, CONTROL_BASE_PERIOD_US, ctrl_overrun_count);
-        ctrl_exec_max_us = 0;
+    if (xTaskCreatePinnedToCore(telemetry_task, "telemetry", 4096, NULL, TELEMETRY_TASK_PRIO, NULL, TELEMETRY_TASK_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create telemetry task.");
     }
 }
 

@@ -105,15 +105,32 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     [IDX_CHAR_CFG_F]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ,
     sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
+
+    /*Loop Stats Characteristic Declaration */
+    [IDX_CHAR_G]      =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
+    CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_notify}},
+
+    /*Loop Stats Characteristic Value */
+    [IDX_CHAR_VAL_G]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_LoopStats_Telem, ESP_GATT_PERM_READ,
+    sizeof(loop_stats_t), sizeof(loop_stats_t), (uint8_t *)&Ble_comm::loop_stats}},
+
+    [IDX_CHAR_CFG_G]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+    sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
 };
 
-notify_target_t Ble_comm::notify_targets[6] = {
+loop_stats_t Ble_comm::loop_stats = {0, 0, 0};
+
+notify_target_t Ble_comm::notify_targets[7] = {
     {0, 0, (uint8_t *)xhat_value, sizeof(float)*6, "A"},
     {0, 0, (uint8_t *)PRY_value, sizeof(float)*3, "B"},
     {0, 0, (uint8_t *)controlU, sizeof(float)*5, "C"},
     {0, 0, (uint8_t *)controlGain, sizeof(float)*5*6, "D"},
     {0, 0, (uint8_t *)nullptr, 0, "E"},
     {0, 0, (uint8_t *)q, sizeof(float)*4, "F"},
+    {0, 0, (uint8_t *)&Ble_comm::loop_stats, sizeof(loop_stats_t), "G"},
 };
 
 Ble_comm::Ble_comm(float *xhat_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p, float *q_p) {
@@ -324,8 +341,9 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                 // `param->write.is_prep`が`false`の場合は「通常の書き込み」
 
                 // the data length of gattc write  must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX.
-                ESP_LOGI(GATTS_TABLE_TAG, "GATT_WRITE_EVT, handle = %d, value len = %d", param->write.handle, param->write.len);
-                ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, param->write.value, param->write.len);
+                // 受信ごとのUARTログはBLEタスクを止めるのでDEBUGレベルに落とす
+                ESP_LOGD(GATTS_TABLE_TAG, "GATT_WRITE_EVT, handle = %d, value len = %d", param->write.handle, param->write.len);
+                ESP_LOG_BUFFER_HEX_LEVEL(GATTS_TABLE_TAG, param->write.value, param->write.len, ESP_LOG_DEBUG);
 
                 // CCCD(Notify/Indicate設定)への書き込みかどうかを検索
                 notify_target_t *notify_target = Ble_comm::getNotifyTargetByCfgHandle(param->write.handle);
@@ -372,7 +390,7 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                     } else if (notify_target == &Ble_comm::notify_targets[4]) { // Remote Command
                         if (param->write.len > sizeof(uint8_t)) {
                             command_cb(param->write.value, param->write.len);
-                            ESP_LOGI(GATTS_TABLE_TAG, "Remote Command updated: %d", param->write.value[0]);
+                            ESP_LOGD(GATTS_TABLE_TAG, "Remote Command updated: %d", param->write.value[0]);
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Remote Command write");
                         }
@@ -440,9 +458,10 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
             }
             else {
                 ESP_LOGI(GATTS_TABLE_TAG, "create attribute table successfully, the number handle = %d",param->add_attr_tab.num_handle);
-                constexpr uint16_t cfg_indices[6] = {IDX_CHAR_CFG_A, IDX_CHAR_CFG_B, IDX_CHAR_CFG_C, IDX_CHAR_CFG_D, IDX_CHAR_CFG_E, IDX_CHAR_CFG_F};
-                constexpr uint16_t val_indices[6] = {IDX_CHAR_VAL_A, IDX_CHAR_VAL_B, IDX_CHAR_VAL_C, IDX_CHAR_VAL_D, IDX_CHAR_VAL_E, IDX_CHAR_VAL_F};
-                for (int i = 0; i < 6; ++i) {
+                constexpr uint16_t cfg_indices[] = {IDX_CHAR_CFG_A, IDX_CHAR_CFG_B, IDX_CHAR_CFG_C, IDX_CHAR_CFG_D, IDX_CHAR_CFG_E, IDX_CHAR_CFG_F, IDX_CHAR_CFG_G};
+                constexpr uint16_t val_indices[] = {IDX_CHAR_VAL_A, IDX_CHAR_VAL_B, IDX_CHAR_VAL_C, IDX_CHAR_VAL_D, IDX_CHAR_VAL_E, IDX_CHAR_VAL_F, IDX_CHAR_VAL_G};
+                static_assert(sizeof(cfg_indices)/sizeof(cfg_indices[0]) == sizeof(notify_targets)/sizeof(notify_targets[0]), "notify_targets size mismatch");
+                for (size_t i = 0; i < sizeof(cfg_indices)/sizeof(cfg_indices[0]); ++i) {
                     notify_targets[i].cfg_handle = param->add_attr_tab.handles[cfg_indices[i]];
                     notify_targets[i].val_handle = param->add_attr_tab.handles[val_indices[i]];
                 }
@@ -556,5 +575,20 @@ void Ble_comm::sendTelemetry(){
                 break;
             }
         }
+    }
+}
+void Ble_comm::sendLoopStats(const loop_stats_t &stats){
+    notify_target_t &target = notify_targets[6];
+    Ble_comm::loop_stats = stats;
+    if (target.val_handle == 0) return; // 属性テーブル作成前
+
+    // AUTO_RSPのREADはスタック側のコピーを返すので、属性値も更新しておく
+    esp_ble_gatts_set_attr_value(target.val_handle, target.value_len, target.value_ptr);
+    if (!isClientConnecting()) return;
+
+    esp_err_t err = esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
+                                target.val_handle, target.value_len, target.value_ptr, false);
+    if (err != ESP_OK) {
+        ESP_LOGW(GATTS_TABLE_TAG, "loop stats send failed: %s", esp_err_to_name(err));
     }
 }
