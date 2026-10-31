@@ -3,6 +3,7 @@
 #include "ESP32_i2c_LSM9DS1.h"
 #include "MadgwickAHRS.h"
 #include "esp_log.h"
+#include "freertos/task.h"
 #include "esp_dsp.h"
 #include "dsp_platform.h"
 #include "mat.h"
@@ -37,7 +38,11 @@ void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_
 	mag_count = 0;
 
 	madgwick.begin(sampleFreq);
-	//correctInitValue(10);
+
+	// 静止中にジャイロのバイアスを測ってから姿勢推定を始める
+	calibrateGyroBias(gyro_calib_samples);
+	madgwick.setBeta(beta_init);
+	beta_init_count = (uint32_t)(beta_init_time * sampleFreq);
 }
 
 void Motion_control::Sensor2Body(){
@@ -215,9 +220,11 @@ void Motion_control::update(){
 	a_imu(0, 0) = imu.calcAccel(imu.ax) * gravity_c;
 	a_imu(1, 0) = -imu.calcAccel(imu.ay) * gravity_c;
 	a_imu(2, 0) = imu.calcAccel(imu.az) * gravity_c;
-	g_imu(0, 0) = imu.calcGyro(imu.gx) * deg2rad;
-	g_imu(1, 0) = -imu.calcGyro(imu.gy) * deg2rad;
-	g_imu(2, 0) = imu.calcGyro(imu.gz) * deg2rad;
+	float g_raw[3];
+	gyroImu(g_raw);
+	g_imu(0, 0) = g_raw[0] - g_bias[0];
+	g_imu(1, 0) = g_raw[1] - g_bias[1];
+	g_imu(2, 0) = g_raw[2] - g_bias[2];
 	m_imu(0, 0) = -imu.calcMag(imu.mx) * 0.00014f;
 	m_imu(1, 0) = -imu.calcMag(imu.my) * 0.00014f;
 	m_imu(2, 0) = imu.calcMag(imu.mz) * 0.00014f; // gauss/LSB
@@ -226,6 +233,9 @@ void Motion_control::update(){
 	madgwick.update(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
 				a_imu(0, 0), a_imu(1, 0), a_imu(2, 0),
 				m_imu(0, 0), m_imu(1, 0), m_imu(2, 0));
+	if (beta_init_count > 0 && --beta_init_count == 0) {
+		madgwick.setBeta(beta_run);
+	}
 
 	//計算結果を取得（IMU座標系 → 機体座標系の補正はここで行う）
 	getPRY(PRY_value);
@@ -247,10 +257,34 @@ static void mat_vec_affine(dspm::Mat &out, const dspm::Mat &M, const float *x, f
 	}
 }
 
+// u(1,0)～u(4,0)（サーボ）を lo～hi にクランプ
+static void clamp_servo(dspm::Mat &u, float lo, float hi)
+{
+	for (uint8_t i = 1; i < 5; i++) {
+		if (u(i, 0) < lo) u(i, 0) = lo;
+		if (u(i, 0) > hi) u(i, 0) = hi;
+	}
+}
+
 void Motion_control::calcU(){
+	// ゲイン・目標値・モードの書き換え（BLEのタスク）と重ならないようにする
+	taskENTER_CRITICAL(&param_lock);
+	if (ControlMethod != prev_method) {
+		pitch_pid.reset();
+		roll_pid.reset();
+		yaw_pid.reset();
+		prev_method = ControlMethod;
+	}
+
 	if (ControlMethod == 0 || ControlMethod == 1) {
-		float xsrc[] = {0, 0, 0, madgwick.getPitchRadians(), madgwick.getRollRadians(), 0};
-		mat_vec_affine(u, KC, xsrc, -1.0f, 75.0f);
+		// 状態は機体座標の姿勢角（PIDと共通の目標値との差）。x1～x3 と x6 は推定していないので0
+		float xsrc[] = {0, 0, 0, PRY_value[0] - pitch_pid.target, PRY_value[1] - roll_pid.target, 0};
+		#ifdef FLIGHT_MODE_X
+			mat_vec_affine(u, KC, xsrc, -1.0f, 75.0f);
+		#elif defined(FLIGHT_MODE_VERT)
+			mat_vec_affine(u, KC, xsrc, -1.0f, 50.0f);
+			clamp_servo(u, 0.0f, 100.0f);
+		#endif
 	}
 	else if (ControlMethod == 2) {
 		// PID制御を適用
@@ -262,33 +296,38 @@ void Motion_control::calcU(){
 		#ifdef FLIGHT_MODE_X
 			// 制御出力を使用して次の処理を実行
 			mat_vec_affine(u, KPID, xsrc, 1.0f, 75.0f);
-			
-			// u(1,0)～u(4,0)を50～100の範囲にクランプ
-			for (uint8_t i = 1; i < 5; i++) {
-				if (u(i, 0) < 50.0f) u(i, 0) = 50.0f;
-				if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
-			}
-
+			clamp_servo(u, 50.0f, 100.0f);
 		#elif defined(FLIGHT_MODE_VERT)
 			// V字のモードは、u(1,0)～u(4,0)を0～100の範囲にクランプ
 			mat_vec_affine(u, KPID, xsrc, 1.0f, 50.0f);
-			for (uint8_t i = 1; i < 5; i++) {
-				if (u(i, 0) < 0.0f) u(i, 0) = 0.0f;
-				if (u(i, 0) > 100.0f) u(i, 0) = 100.0f;
-			}
+			clamp_servo(u, 0.0f, 100.0f);
 		#endif
 	}
 	else if(ControlMethod == 3){
 		//future reserved
 	}
+	taskEXIT_CRITICAL(&param_lock);
 }
 
 // PID制御計算関数
 float PID::calculatePID(float current) {
     float error = target - current; // 誤差
-    integral += error * dt_cont;     // 積分項
+    if (first) {                     // reset直後は前回の誤差がないので微分項を0にする
+        prev_error = error;
+        first = false;
+    }
     float derivative = (error - prev_error) / dt_cont; // 微分項
     prev_error = error;         // 前回の誤差を更新
+
+    // 積分項。Ki*integral が ±i_limit を超えないように積分値を制限する（アンチワインドアップ）
+    if (fabsf(Ki) > 1e-6f) {
+        integral += error * dt_cont;
+        float lim = i_limit / fabsf(Ki);
+        if (integral > lim) integral = lim;
+        if (integral < -lim) integral = -lim;
+    } else {
+        integral = 0.0f;
+    }
 
     // PID制御出力
     return Kp * error + Ki * integral + Kd * derivative;
@@ -316,10 +355,17 @@ void Motion_control::getPRY(float* retbuf){
 	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
 */
 
-    // ---- 生のRPY取得（V字配置）----
-    float raw_pitch =  (madgwick.getRollRadians()  - 1.5707963267f);
-    float raw_roll  = -(madgwick.getPitchRadians() - PRY_offset[1]);
-    float raw_yaw   = -(madgwick.getYawRadians()   - PRY_offset[2]);
+    // ---- 機体座標の姿勢角（V字配置）----
+    // Madgwick側で q_body = q_imu ⊗ q_mount を計算済みなので、機体姿勢のオイラー角をそのまま使う。
+    // 機体が大きく傾いてもロール・ピッチ・ヨーが混ざらない。
+    // 符号はホバリング付近で従来の式（IMUのオイラー角を足し引きしていた）と一致させてある
+    float body[3]; // roll pitch yaw
+    madgwick.retBodyAngles(body);
+    float yaw = body[2] + 1.5707963267f; // 従来と同じくIMUのヨー角を基準にする
+    if (yaw > 3.1415926535f) yaw -= 6.2831853071f;
+    float raw_pitch =  body[1] - PRY_offset[0];
+    float raw_roll  =  body[0] - PRY_offset[1];
+    float raw_yaw   = -yaw     - PRY_offset[2];
 
     // ---- LPF用の内部状態 ----
     static float flt_pitch = 0.0f;
@@ -338,40 +384,80 @@ void Motion_control::getPRY(float* retbuf){
 }
 
 void Motion_control::setPRYtarget(float pitch_target, float roll_target, float yaw_target){
+	taskENTER_CRITICAL(&param_lock);
 	pitch_pid.target = pitch_target;
 	roll_pid.target = roll_target;
 	yaw_pid.target = yaw_target;
+	taskEXIT_CRITICAL(&param_lock);
 }
 
-void Motion_control::calib(){
-	imu.calibrate(true);
+void Motion_control::setPIDTarget(uint8_t axis, float target){
+	PID* pids[] = {&pitch_pid, &roll_pid, &yaw_pid};
+	if (axis >= 3) return;
+	taskENTER_CRITICAL(&param_lock);
+	pids[axis]->target = target;
+	taskEXIT_CRITICAL(&param_lock);
 }
 
-void Motion_control::correctInitValue(uint16_t num_loop){
-	ESP_LOGI(TAG, "calibrate START");
-	//ジャイロセンサの初期値を取得
- 	for (uint8_t i = 0; i < 3; i++)
-	{
-		g0[i] = 0;
-		a0[i] = 0;
-		m0[i] = 0;
+void Motion_control::setPIDGain(uint8_t axis, uint8_t type, float value){
+	PID* pids[] = {&pitch_pid, &roll_pid, &yaw_pid};
+	if (axis >= 3 || type >= 3) return;
+	taskENTER_CRITICAL(&param_lock);
+	switch (type) {
+		case 0: pids[axis]->Kp = value; break;
+		case 1: pids[axis]->Ki = value; break;
+		case 2: pids[axis]->Kd = value; break;
 	}
+	taskEXIT_CRITICAL(&param_lock);
+}
 
-    for (uint16_t calibStep = 0; calibStep < num_loop; calibStep++)
-    {
-        imu.readGyro();
-		imu.readAccel();
-		imu.readMag();
-		g0[0] += g0[0] / 2.0f + imu.calcGyro(imu.gx)/2.0f * gravity_c;
-		g0[1] += g0[1] / 2.0f + imu.calcGyro(imu.gy)/2.0f * gravity_c;
-		g0[2] += g0[2] / 2.0f + imu.calcGyro(imu.gz)/2.0f * gravity_c;
-		a0[0] += a0[0] / 2.0f + imu.calcAccel(imu.ax)/2.0f * deg2rad;
-		a0[1] += a0[1] / 2.0f + imu.calcAccel(imu.ay)/2.0f * deg2rad;
-		a0[2] += a0[2] / 2.0f + imu.calcAccel(imu.az)/2.0f * deg2rad;
-		m0[0] += m0[0] / 2.0f + imu.calcMag(imu.mx)/2.0f * 0.00014f;
-		m0[1] += m0[1] / 2.0f + imu.calcMag(imu.my)/2.0f * 0.00014f;
-		m0[2] += m0[2] / 2.0f + imu.calcMag(imu.mz)/2.0f * 0.00014f;
+void Motion_control::setControlMethod(uint8_t method){
+	taskENTER_CRITICAL(&param_lock);
+	ControlMethod = method;
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+void Motion_control::setKC(const uint8_t *src, uint16_t first, uint16_t count){
+	if (first + count > (uint16_t)(KC.rows * KC.cols)) return;
+	taskENTER_CRITICAL(&param_lock);
+	memcpy(&KC.data[first], src, sizeof(float) * count);
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+// ジャイロの角速度[rad/s]をIMU座標（Y軸の符号反転後）で取得する。バイアスは引かない
+void Motion_control::gyroImu(float *out){
+	out[0] = imu.calcGyro(imu.gx) * deg2rad;
+	out[1] = -imu.calcGyro(imu.gy) * deg2rad;
+	out[2] = imu.calcGyro(imu.gz) * deg2rad;
+}
+
+// 静止状態でジャイロのバイアスを測る。起動直後に呼ぶので、その間は機体を動かさないこと。
+// 動いていたと判定したら測り直す（3回まで）
+void Motion_control::calibrateGyroBias(uint16_t samples){
+	for (int attempt = 0; attempt < 3; attempt++) {
+		float sum[3] = {0}, sq[3] = {0};
+		for (uint16_t i = 0; i < samples; i++) {
+			imu.readGyro();
+			float g_raw[3];
+			gyroImu(g_raw);
+			for (int k = 0; k < 3; k++) {
+				sum[k] += g_raw[k];
+				sq[k] += g_raw[k] * g_raw[k];
+			}
+			vTaskDelay(1); // 1ms（ジャイロのODRは952Hz）
+		}
+
+		float std_max = 0.0f;
+		for (int k = 0; k < 3; k++) {
+			g_bias[k] = sum[k] / samples;
+			float var = sq[k] / samples - g_bias[k] * g_bias[k];
+			float sd = var > 0.0f ? sqrtf(var) : 0.0f;
+			if (sd > std_max) std_max = sd;
+		}
+		ESP_LOGI(TAG, "gyro bias [deg/s]: %.2f %.2f %.2f (std max %.2f)",
+				 g_bias[0] * rad2deg, g_bias[1] * rad2deg, g_bias[2] * rad2deg, std_max * rad2deg);
+		if (std_max <= gyro_still_std) return;
+		ESP_LOGW(TAG, "gyro calibration: drone seems to be moving, retry");
 	}
-
-	ESP_LOGI(TAG, "calibrate FINISH");
+	ESP_LOGW(TAG, "gyro calibration: using the last result although the drone was moving");
 }

@@ -56,7 +56,8 @@ void LSM9DS1::init()
 	settings.gyro.enableY = true;
 	settings.gyro.enableZ = true;
 	// gyro scale can be 245, 500, or 2000
-	settings.gyro.scale = 2000;
+	// 機体の角速度は±500dpsに収まるので分解能を優先する（70→17.5 mdps/LSB）
+	settings.gyro.scale = 500;
 	// gyro sample rate: value between 1-6
 	// 1 = 14.9    4 = 238
 	// 2 = 59.5    5 = 476
@@ -84,7 +85,8 @@ void LSM9DS1::init()
 	settings.accel.enableY = true;
 	settings.accel.enableZ = true;
 	// accel scale can be 2, 4, 8, or 16
-	settings.accel.scale = 16;
+	// ±4gだとモーター振動で飽和するおそれがあるので±8g
+	settings.accel.scale = 8;
 	// accel sample rate can be 1-6
 	// 1 = 10 Hz    4 = 238 Hz
 	// 2 = 50 Hz    5 = 476 Hz

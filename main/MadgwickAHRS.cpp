@@ -26,7 +26,8 @@
 // Definitions
 
 #define sampleFreqDef   512.0f          // sample frequency in Hz
-#define betaDef         0.8f            // 2 * proportional gain
+#define betaDef         0.1f            // 2 * proportional gain
+// 角速度の入力は rad/s（Motion_control 側で変換済みなので、ここでは変換しない）
 
 
 //============================================================================================
@@ -56,11 +57,6 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay, float az
 		updateIMU(gx, gy, gz, ax, ay, az);
 		return;
 	}
-
-	// Convert gyroscope degrees/sec to radians/sec
-	gx *= 0.0174533f;
-	gy *= 0.0174533f;
-	gz *= 0.0174533f;
 
 	// Rate of change of quaternion from gyroscope
 	qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
@@ -144,14 +140,7 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay, float az
 	q2 *= recipNorm;
 	q3 *= recipNorm;
 
-	/*
-	//body座標への変換
-	// --- 2) q_body = q_mount * q_imu ---
-    qb0 = imw*q0 - imx*q1 - imy*q2 - imz*q3;
-    qb1 = imw*q1 + imx*q0 + imy*q3 - imz*q2;
-    qb2 = imw*q2 - imx*q3 + imy*q0 + imz*q1;
-    qb3 = imw*q3 + imx*q2 - imy*q1 + imz*q0;
-	*/
+	updateBodyQuaternion();
 	anglesComputed = 0;
 }
 
@@ -162,11 +151,6 @@ void Madgwick::updateIMU(float gx, float gy, float gz, float ax, float ay, float
 	float recipNorm;
 	float s0, s1, s2, s3;
 	float _2q0, _2q1, _2q2, _2q3, _4q0, _4q1, _4q2 ,_8q1, _8q2, q0q0, q1q1, q2q2, q3q3;
-
-	// Convert gyroscope degrees/sec to radians/sec
-	gx *= 0.0174533f;
-	gy *= 0.0174533f;
-	gz *= 0.0174533f;
 
 	// Rate of change of quaternion from gyroscope
 	qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
@@ -228,7 +212,19 @@ void Madgwick::updateIMU(float gx, float gy, float gz, float ax, float ay, float
 	q1 *= recipNorm;
 	q2 *= recipNorm;
 	q3 *= recipNorm;
+	updateBodyQuaternion();
 	anglesComputed = 0;
+}
+
+//-------------------------------------------------------------------------------------------
+// 機体座標の姿勢 q_body = q_imu ⊗ q_mount
+// q_mount は機体座標のベクトルをIMU座標で表す回転（取り付け角度）
+
+void Madgwick::updateBodyQuaternion() {
+	qb0 = q0*imw - q1*imx - q2*imy - q3*imz;
+	qb1 = q0*imx + q1*imw + q2*imz - q3*imy;
+	qb2 = q0*imy - q1*imz + q2*imw + q3*imx;
+	qb3 = q0*imz + q1*imy - q2*imx + q3*imw;
 }
 
 //-------------------------------------------------------------------------------------------
@@ -251,25 +247,21 @@ float Madgwick::invSqrt(float x) {
 void Madgwick::computeAngles()
 {
 	// --- IMU座標系クォータニオンから Roll/Pitch/Yaw を計算 ---
-    // 四元数 q = [w, x, y, z] = [qb0, qb1, qb2, qb3]
-	/*
-	roll = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
-	pitch = asinf(-2.0f * (qb1*qb3 - qb0*qb2));
-	yaw = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
-	*/
 	roll = atan2f(q0*q1 + q2*q3, 0.5f - q1*q1 - q2*q2);
 	pitch = asinf(-2.0f * (q1*q3 - q0*q2));
 	yaw = atan2f(q1*q2 + q0*q3, 0.5f - q2*q2 - q3*q3);
 	anglesComputed = 1;
 }
 
-//IMU姿勢角を return: roll pitch yawの順でrvに格納
+//機体座標の姿勢角[rad]を roll pitch yaw の順でrvに格納（qb の ZYX オイラー角）
 void Madgwick::retBodyAngles(float *rv)
 {
-    if(!anglesComputed)computeAngles();
-	rv[0] = roll;
-	rv[1] = pitch;
-	rv[2] = yaw;
+	rv[0] = atan2f(qb0*qb1 + qb2*qb3, 0.5f - qb1*qb1 - qb2*qb2);
+	float sp = -2.0f * (qb1*qb3 - qb0*qb2);
+	if (sp > 1.0f) sp = 1.0f;
+	if (sp < -1.0f) sp = -1.0f;
+	rv[1] = asinf(sp);
+	rv[2] = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
 }
 void Madgwick::calcW(){
 	wx = 2.0 *(qDot1 * q3 + qDot2 * q2 - qDot3 * q1 - qDot4 * q0);

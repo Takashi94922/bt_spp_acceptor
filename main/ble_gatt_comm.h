@@ -133,6 +133,10 @@ public:
     void setDisconnectCb(void (*disconnect_cb_p)()) {
         Ble_comm::disconnect_cb = disconnect_cb_p;
     }
+    // KC（Control Gain）への一括書き込みを受けたときに呼ぶ関数。未設定なら直接コピーする
+    void setGainUpdateCb(void (*gain_update_cb_p)(const uint8_t* data, uint16_t len)) {
+        Ble_comm::gain_update_cb = gain_update_cb_p;
+    }
     static bool isConnecting, isWriting;
     void sendMsg(char *msg, unsigned char len);
     void sendTelemetry();
@@ -185,6 +189,7 @@ private:
     static float *q;
     static void (*command_cb)(uint8_t* data, uint16_t len);
     static void (*disconnect_cb)();
+    static void (*gain_update_cb)(const uint8_t* data, uint16_t len);
 
     static prepare_type_env_t *env_list[5];
 };

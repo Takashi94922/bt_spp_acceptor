@@ -177,6 +177,7 @@ float *Ble_comm::xhat_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_com
 
 prepare_type_env_t *Ble_comm::env_list[5];
 void (*Ble_comm::disconnect_cb)() = nullptr;
+void (*Ble_comm::gain_update_cb)(const uint8_t* data, uint16_t len) = nullptr;
 
 gatts_profile_inst Ble_comm::profile_tab[PROFILE_NUM] = {
     {
@@ -384,7 +385,11 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
                     } else if (notify_target == &Ble_comm::notify_targets[3]) { // Control Gain
                         constexpr size_t expected_bytes = sizeof(float) * 5 * 6;
                         if (param->write.len == expected_bytes) {
-                            memcpy(Ble_comm::controlGain, param->write.value, expected_bytes);
+                            if (Ble_comm::gain_update_cb) {
+                                Ble_comm::gain_update_cb(param->write.value, param->write.len);
+                            } else {
+                                memcpy(Ble_comm::controlGain, param->write.value, expected_bytes);
+                            }
                         } else {
                             ESP_LOGE(GATTS_TABLE_TAG, "Invalid length for Control Gain write: %d", param->write.len);
                         }

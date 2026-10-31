@@ -31,27 +31,27 @@ private:
     char anglesComputed;
 
     void computeAngles();
+    void updateBodyQuaternion();
 
     //-------------------------------------------------------------------------------------------
     // Function declarations
 public:
-    float qDot1, qDot2, qDot3, qDot4,
-    qb0, qb1, qb2, qb3;
+    float qDot1, qDot2, qDot3, qDot4;
+    float qb0 = 1.0f, qb1 = 0.0f, qb2 = 0.0f, qb3 = 0.0f; // 機体座標の姿勢（q ⊗ q_mount）
     float q0, q1, q2, q3;	// quaternion of sensor frame relative to auxiliary frame
     float wx, wy, wz;
     
-    //IMUの取り付け角度に対するクオータニオン
-/*     static constexpr float imw = 0.5f;
-	static constexpr float imx = -0.5f;
-	static constexpr float imy = -0.5f;
-	static constexpr float imz = -0.5f; */
-    static constexpr float imw = 1.0f; 
-    static constexpr float imx = 0.0f; 
-    static constexpr float imy = 0.0f;
-    static constexpr float imz = 0.0f;
+    //IMUの取り付け角度に対するクオータニオン（V字）
+    //回転行列にすると Motion_control の IMU_2_body の転置（機体x=IMU z、機体y=IMU x、機体z=IMU y）
+    static constexpr float imw = 0.5f;
+    static constexpr float imx = -0.5f;
+    static constexpr float imy = -0.5f;
+    static constexpr float imz = -0.5f;
 
     Madgwick();
     void begin(float sampleFrequency) { invSampleFreq = 1.0f / sampleFrequency; }
+    void setBeta(float b) { beta = b; }
+    // 角速度 gx, gy, gz の単位は rad/s
     void update(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz);
     void updateIMU(float gx, float gy, float gz, float ax, float ay, float az);
     void calcW();

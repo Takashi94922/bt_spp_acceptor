@@ -3,6 +3,7 @@
 #include "esp_dsp.h"
 #include "dsp_platform.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
 
 #define TAG "MOTION"
 struct PID {
@@ -11,7 +12,10 @@ struct PID {
 	float prev_error;
 	float integral;
 	float target; // 目標値（セットポイント）
+	float i_limit = 20.0f; // 積分項の出力の上限[%]（アンチワインドアップ）
+	bool first = true;     // reset直後。初回は微分項を計算しない
 	float calculatePID(float current);
+	void reset() { integral = 0.0f; prev_error = 0.0f; first = true; }
 };
 class Motion_control{
 	LSM9DS1 imu;
@@ -124,9 +128,17 @@ public:
 	uint16_t mag_count = 0;
 
 	float gv[3] = {0.0, 0.0, -gravity_c};
-	float a0[3] = {0};
-	float g0[3] = {0};
-	float m0[3] = {0};
+	float g_bias[3] = {0};   // ジャイロのバイアス[rad/s]（IMU座標、符号反転後）
+
+	// Madgwickのβ。起動直後は大きくして加速度・磁気の向きに素早く合わせ、その後通常値に戻す
+	static constexpr float beta_init = 2.0f;
+	static constexpr float beta_run = 0.1f;
+	static constexpr float beta_init_time = 1.0f; // [s]
+	uint32_t beta_init_count = 0;
+
+	// 起動時のジャイロバイアス測定
+	static constexpr uint16_t gyro_calib_samples = 500;
+	static constexpr float gyro_still_std = 1.0f * deg2rad; // これ以上ばらつくと「動いていた」とみなす[rad/s]
 	dspm::Mat a_grav = dspm::Mat(3, 1);
 	dspm::Mat a = dspm::Mat(3, 1);
 	dspm::Mat g = dspm::Mat(3, 1);
@@ -162,6 +174,11 @@ public:
 	float thetadot[3] = {0};
 	PID pitch_pid, roll_pid, yaw_pid;
 	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
+	uint8_t prev_method = 0;   // モードが変わったらPIDの内部状態をリセットする
+
+	// ゲイン・目標値・モードはBLEのタスク（Core 0）から書き換えられ、制御タスク（Core 1）が読む。
+	// 書き換えは下のset系関数を通し、calcUの計算中と重ならないようにする
+	portMUX_TYPE param_lock = portMUX_INITIALIZER_UNLOCKED;
 
 	void begin(float sampleFreq, float Control_freq, i2c_master_bus_handle_t bus_handle);
     void skew(dspm::Mat &v );
@@ -173,7 +190,11 @@ public:
     void getPRY(float *retbuf);
 	void getQuaternion(float* retbuf);
 	void setPRYtarget(float pitch_target, float roll_target, float yaw_target);
-    void calib();
-    void correctInitValue(uint16_t num_loop);
+	void setPIDTarget(uint8_t axis, float target);            // axis 0:pitch 1:roll 2:yaw
+	void setPIDGain(uint8_t axis, uint8_t type, float value); // type 0:Kp 1:Ki 2:Kd
+	void setControlMethod(uint8_t method);
+	void setKC(const uint8_t *src, uint16_t first, uint16_t count); // KC.data[first..] にfloatをcount個
+	void calibrateGyroBias(uint16_t samples);
+	void gyroImu(float *out);
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);
 };

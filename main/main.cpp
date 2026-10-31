@@ -208,15 +208,6 @@ static void set_servo_pwm(uint8_t servo_id, float pwm) {
     }
 }
 
-// PID設定関数
-static void set_pid_gain(void* pid_ptr, uint8_t gain_type, const uint8_t* value) {
-    switch(gain_type) {
-        case 0: memcpy(&((PID*)pid_ptr)->Kp, value, sizeof(float)); break;
-        case 1: memcpy(&((PID*)pid_ptr)->Ki, value, sizeof(float)); break;
-        case 2: memcpy(&((PID*)pid_ptr)->Kd, value, sizeof(float)); break;
-    }
-}
-
 // 受信バッファ上のfloatはアライメントされていないのでmemcpyで読む
 static float read_float(const uint8_t* p) {
     float v;
@@ -234,12 +225,11 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             set_servo_pwm(msg[0], msg[1]);
             break;
         case 5:
-            motion.ControlMethod = msg[1];
+            motion.setControlMethod(msg[1]);
             break;
         case 6 ... 9:
             if (msglen >= 1+sizeof(float)*6) {
-                ESP_LOGI(TAG, "%1.2f,%1.2f,%1.2f", motion.KC(0, 3), motion.KC(1, 3), motion.KC(2, 3));
-                memcpy(&motion.KC.data[(msg[0] -6)*6], &msg[1], sizeof(float) * 6);
+                motion.setKC(&msg[1], (msg[0] - 6) * 6, 6);
             }
             break;
         case 10: {
@@ -251,14 +241,9 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             }
             break;
         }
-        case 11:
-            if(msglen >= 6) set_pid_gain(&motion.pitch_pid, msg[1], &msg[2]);
-            break;
-        case 12:
-            if(msglen >= 6) set_pid_gain(&motion.roll_pid, msg[1], &msg[2]);
-            break;
-        case 13:
-            if(msglen >= 6) set_pid_gain(&motion.yaw_pid, msg[1], &msg[2]);
+        // PIDゲイン（11:pitch 12:roll 13:yaw、msg[1]は 0:Kp 1:Ki 2:Kd）
+        case 11 ... 13:
+            if(msglen >= 6) motion.setPIDGain(msg[0] - 11, msg[1], read_float(&msg[2]));
             break;
 
         //PID目標値の一括セット
@@ -268,14 +253,8 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             }
             break;
         //PID目標値の個別セット
-        case 15:
-            if (msglen >= 1+sizeof(float)) motion.pitch_pid.target = read_float(&msg[1]);
-            break;
-        case 16:
-            if (msglen >= 1+sizeof(float)) motion.roll_pid.target = read_float(&msg[1]);
-            break;
-        case 17:
-            if (msglen >= 1+sizeof(float)) motion.yaw_pid.target = read_float(&msg[1]);
+        case 15 ... 17:
+            if (msglen >= 1+sizeof(float)) motion.setPIDTarget(msg[0] - 15, read_float(&msg[1]));
             break;
         // ハートビート（受信時刻の更新はon_command_receivedで済んでいる）
         case CMD_HEARTBEAT:
@@ -421,6 +400,10 @@ extern "C" void app_main(void)
     bl_comm.setCommandCb(command_cb);
     #ifndef COMM_MODE_BT_SPP
     bl_comm.setDisconnectCb(on_ble_disconnected);
+    // KCの一括書き込み（ContGain_Upd）も制御計算と排他して反映する
+    bl_comm.setGainUpdateCb([](const uint8_t* data, uint16_t len) {
+        motion.setKC(data, 0, len / sizeof(float));
+    });
     #endif
     ESP_ERROR_CHECK(bl_comm.begin());
 
