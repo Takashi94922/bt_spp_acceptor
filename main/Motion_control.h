@@ -10,10 +10,14 @@ struct PID {
 	float dt_cont;
 	float integral;
 	float target; // 目標値（セットポイント）
-	float i_limit = 20.0f; // 積分項の出力の上限[%]（アンチワインドアップ）
+	float i_limit = 10.0f; // 積分項の出力の上限[%]（アンチワインドアップ）。打ち消したい一定のトルクは約3%
+	float i_band = 5.0f * 0.0174533f; // [rad] 誤差がこれ以内のときだけ積分する（大きなずれはP・Dに任せる）
+	// 直近の出力の内訳[%]（記録用）。PIDモード以外では0
+	float last_p = 0.0f, last_i = 0.0f, last_d = 0.0f;
 	// current: 現在の角度[rad]、rate: その角度の変化率[rad/s]（ジャイロから計算）
 	float calculatePID(float current, float rate);
 	void reset() { integral = 0.0f; }
+	void clearTerms() { last_p = last_i = last_d = 0.0f; }
 };
 class Motion_control{
 	LSM9DS1 imu;

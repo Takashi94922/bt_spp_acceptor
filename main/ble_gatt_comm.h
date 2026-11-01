@@ -60,6 +60,10 @@ enum
     IDX_CHAR_G,
     IDX_CHAR_VAL_G,
     IDX_CHAR_CFG_G,
+
+    IDX_CHAR_H,
+    IDX_CHAR_VAL_H,
+    IDX_CHAR_CFG_H,
     IDX_NB,
 };
 typedef struct {
@@ -100,6 +104,7 @@ constexpr uint16_t GATTS_CHAR_UUID_ContGain_Upd = 0xFF04;
 constexpr uint16_t GATTS_CHAR_UUID_Command = 0xFF05;
 constexpr uint16_t GATTS_CHAR_UUID_Quaternion_Telem = 0xFF06;
 constexpr uint16_t GATTS_CHAR_UUID_LoopStats_Telem = 0xFF07;
+constexpr uint16_t GATTS_CHAR_UUID_Log_Telem = 0xFF08; // 制御周期の記録（flight_log.h の形式）
 
 // 0xFF07で送る制御ループ負荷（リトルエンディアンのuint32 x3）
 typedef struct {
@@ -141,6 +146,10 @@ public:
     void sendMsg(const char *msg, unsigned char len);
     void sendTelemetry();
     void sendLoopStats(const loop_stats_t &stats);
+    // 記録のパケットを1つ送る。送信キューに入れられたらtrue
+    bool sendLog(const uint8_t *data, uint16_t len);
+    // 1回の通知で送れる最大のバイト数（MTU - 3）
+    static uint16_t notifyPayloadMax() { return mtu - 3; }
 private:
     // BLE advertising/scan data
     static constexpr uint8_t RAW_ADV_DATA[21] = {
@@ -177,7 +186,8 @@ private:
     static gatts_profile_inst profile_tab[PROFILE_NUM];
     
     static esp_gatts_attr_db_t gatt_db[IDX_NB];
-    static notify_target_t notify_targets[7];
+    static notify_target_t notify_targets[8];
+    static volatile uint16_t mtu; // 接続相手と決めたMTU。切断で既定値（23）に戻す
     static loop_stats_t loop_stats;
     static notify_target_t* getNotifyTargetByCfgHandle(uint16_t cfg_handle);
     static notify_target_t* getNotifyTargetByValHandle(uint16_t val_handle);

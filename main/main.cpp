@@ -31,6 +31,7 @@
 
 #include "motor.h"
 #include "Motion_control.h"
+#include "flight_log.h"
 
 #define SERVO_TIMEBASE_RESOLUTION_HZ 1000000  // 1MHz, 1us per tick
 #define SERVO_TIMEBASE_PERIOD        20000    // 20000 ticks, 20ms
@@ -55,12 +56,22 @@
 #define CMD_STATUS             20     // ドローン側の状態。TELEMETRY_PERIOD_MSごとに Command の通知で送る
 #define CMD_GAIN_READ          21     // ゲインの読み戻し要求。PIDとKCの各行を同じ番号で Command の通知に返す
 #define CMD_KC_ROW4            22     // KCの5行目（S4）の書き込み。1〜4行目は 6〜9 番
+#define CMD_LOG_START          23     // 記録の開始 [23, 秒 u8]。記録が終わると Log_Telem で送る
+#define CMD_LOG_RESEND         24     // 記録の送り直し [24, 先頭のサンプル番号 u16, 個数 u16]。個数0ならヘッダから全部
+
+// 記録（flight_log.h）の設定
+#define LOG_MAX_SECONDS        10     // 1回の記録の上限[s]（メモリが足りなければもっと短くなる）
+#define LOG_PACKETS_PER_TICK   15     // テレメトリ周期1回で送る記録のパケット数の上限
+#define LOG_PACKET_INTERVAL_MS 10     // 記録のパケットの送信間隔（BLEの送信キューをあふれさせない）
+#define LOG_PACKET_MAX         (4 + 46 * 5) // 1パケットの上限[byte]。MTUが大きくてもサンプル5個まで
 
 // CMD_STATUS の flags
 #define STATUS_FLAG_FAILSAFE    (1 << 0) // 緊急動作中（BLE切断・ハートビート途絶）
 #define STATUS_FLAG_CALIBRATING (1 << 1) // ジャイロ校正中
 #define STATUS_FLAG_HEARTBEAT   (1 << 2) // ハートビートの監視が有効
 #define STATUS_FLAG_MAG         (1 << 3) // 姿勢推定に地磁気を使っている（モーター停止中）
+#define STATUS_FLAG_LOG_REC     (1 << 4) // 記録中
+#define STATUS_FLAG_LOG_SEND    (1 << 5) // 記録を送信中
 
 // CMD_GAIN_READ の応答の種類（msg[1]）。KCは1行ずつ GAIN_KIND_KC_ROW0 + 行番号 で送る
 #define GAIN_KIND_PID           0
@@ -77,6 +88,7 @@ enum GyroCalibStatus : uint8_t {
 
 Motor *Thrust, *Servo1, *Servo2, *Servo3, *Servo4;
 Motion_control motion;
+FlightLog flight_log;
 
 #include "ble_gatt_comm.h"
 void (*Ble_comm::command_cb)(uint8_t* data, uint16_t len) = command_cb;
@@ -169,6 +181,77 @@ static void send_gyro_calib_result(uint8_t status)
 // 読み戻しはコマンドでは要求を立てるだけにし、テレメトリタスクから送る（BLEのコールバック内でまとめて送らない）
 static volatile bool gain_read_requested = false;
 
+// ---- 記録 ----
+// 開始・送り直しもコマンドでは要求を立てるだけにし、バッファの確保と送信はテレメトリタスクで行う
+static volatile uint8_t log_start_seconds = 0;  // 0以外なら開始の要求
+static volatile bool log_resend_requested = false;
+static volatile uint16_t log_resend_first = 0, log_resend_count = 0;
+
+static int16_t to_fixed(float v, float scale)
+{
+    float x = v * scale;
+    if (x > 32767.0f) return 32767;
+    if (x < -32768.0f) return -32768;
+    return (int16_t)lrintf(x);
+}
+
+// 制御周期ごとに1サンプル記録する（制御タスクから）
+static void record_flight_log()
+{
+    if (!flight_log.isRecording()) return;
+    const PID *pids[] = {&motion.pitch_pid, &motion.roll_pid, &motion.yaw_pid};
+    FlightLogSample s;
+    s.throttle = to_fixed(Thrust->getPercent(), FLIGHT_LOG_SCALE_PERCENT);
+    for (int i = 0; i < 3; i++) {
+        s.target[i] = to_fixed(pids[i]->target, FLIGHT_LOG_SCALE_ANGLE);
+        s.angle[i] = to_fixed(motion.PRY_value[i], FLIGHT_LOG_SCALE_ANGLE);
+        s.rate[i] = to_fixed(motion.PRY_rate[i], FLIGHT_LOG_SCALE_RATE);
+        s.pid[i][0] = to_fixed(pids[i]->last_p, FLIGHT_LOG_SCALE_PERCENT);
+        s.pid[i][1] = to_fixed(pids[i]->last_i, FLIGHT_LOG_SCALE_PERCENT);
+        s.pid[i][2] = to_fixed(pids[i]->last_d, FLIGHT_LOG_SCALE_PERCENT);
+    }
+    for (int i = 0; i < 4; i++) {
+        s.servo[i] = to_fixed(motion.u(i + 1, 0), FLIGHT_LOG_SCALE_PERCENT);
+    }
+    flight_log.record(s);
+}
+
+// 記録の開始・送り直しの要求を処理し、送信待ちのパケットを送る（テレメトリタスクから）
+static void service_flight_log()
+{
+    if (log_start_seconds != 0) {
+        uint8_t sec = log_start_seconds;
+        log_start_seconds = 0;
+        if (sec > LOG_MAX_SECONDS) sec = LOG_MAX_SECONDS;
+        FlightLogInfo info = {};
+        info.period_us = CONTROL_BASE_PERIOD_US * CONTROL_U_DIV;
+        info.control_method = motion.ControlMethod;
+        motion.getPIDGains(info.pid_gains);
+        motion.getPIDTargets(info.targets);
+        uint32_t samples = (uint32_t)sec * 1000000u / info.period_us;
+        flight_log.start((uint16_t)samples, info);
+    }
+    if (log_resend_requested) {
+        log_resend_requested = false;
+        flight_log.requestResend(log_resend_first, log_resend_count);
+    }
+
+    if (!bl_comm.isClientConnecting()) return;
+    uint8_t pkt[LOG_PACKET_MAX];
+    size_t max_len = bl_comm.notifyPayloadMax();
+    if (max_len > sizeof(pkt)) max_len = sizeof(pkt);
+    for (int i = 0; i < LOG_PACKETS_PER_TICK && flight_log.hasPacket(); i++) {
+        size_t len = flight_log.buildPacket(pkt, max_len);
+        if (len == 0) {
+            ESP_LOGW(TAG, "log packet does not fit in MTU %u", (unsigned)(max_len + 3));
+            break;
+        }
+        if (!bl_comm.sendLog(pkt, len)) break; // 次のテレメトリ周期で送り直す
+        flight_log.advance();
+        vTaskDelay(pdMS_TO_TICKS(LOG_PACKET_INTERVAL_MS));
+    }
+}
+
 // [CMD_STATUS, 制御モード, flags, 0, スロットル[%], 目標 pitch/roll/yaw[rad]]（float）
 static void send_status()
 {
@@ -177,6 +260,8 @@ static void send_status()
     if (gyro_calibrating) flags |= STATUS_FLAG_CALIBRATING;
     if (heartbeat_armed) flags |= STATUS_FLAG_HEARTBEAT;
     if (motion.mag_in_use) flags |= STATUS_FLAG_MAG;
+    if (flight_log.isRecording() || log_start_seconds != 0) flags |= STATUS_FLAG_LOG_REC;
+    if (flight_log.hasPacket()) flags |= STATUS_FLAG_LOG_SEND;
 
     float values[4];
     values[0] = Thrust->getPercent();
@@ -289,6 +374,7 @@ static void control_task(void* arg)
         if (++u_count >= CONTROL_U_DIV) {
             u_count = 0;
             apply_control();
+            record_flight_log();
         }
         uint32_t exec_us = (uint32_t)(esp_timer_get_time() - t0);
         if (exec_us > ctrl_exec_max_us) ctrl_exec_max_us = exec_us;
@@ -358,6 +444,20 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         // ハートビート（受信時刻の更新はon_command_receivedで済んでいる）
         case CMD_HEARTBEAT:
+            break;
+        // 記録の開始・送り直し（処理はテレメトリタスクで行う）
+        case CMD_LOG_START:
+            if (msg[1] > 0) log_start_seconds = msg[1];
+            break;
+        case CMD_LOG_RESEND:
+            if (msglen >= 5) {
+                uint16_t first, count;
+                memcpy(&first, &msg[1], 2);
+                memcpy(&count, &msg[3], 2);
+                log_resend_first = first;
+                log_resend_count = count;
+                log_resend_requested = true;
+            }
             break;
         // ゲインの読み戻し（送信はテレメトリタスクで行う）
         case CMD_GAIN_READ:
@@ -459,8 +559,10 @@ static void telemetry_task(void* arg)
 
         check_heartbeat();
 
+        service_flight_log();
         if (bl_comm.isClientConnecting()) {
-            bl_comm.sendTelemetry();
+            // 記録の送信中は帯域を空けるため、通常のテレメトリを止める（状態は送る）
+            if (!flight_log.hasPacket()) bl_comm.sendTelemetry();
             send_status();
             if (gain_read_requested) {
                 gain_read_requested = false;

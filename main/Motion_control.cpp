@@ -133,6 +133,12 @@ void Motion_control::calcU(){
 		yaw_pid.reset();
 	}
 
+	if (ControlMethod != 2) {
+		pitch_pid.clearTerms();
+		roll_pid.clearTerms();
+		yaw_pid.clearTerms();
+	}
+
 	if (ControlMethod == 0 || ControlMethod == 1) {
 		// 状態は機体座標の姿勢角（PIDと共通の目標値との差）。x1～x3 と x6 は推定していないので0
 		float xsrc[] = {0, 0, 0, PRY_value[0] - pitch_pid.target, PRY_value[1] - roll_pid.target, 0};
@@ -163,9 +169,10 @@ float PID::calculatePID(float current, float rate) {
     // 角度の差分と違って遅れとノイズがなく、目標値を変えても出力が跳ねない
     float derivative = -rate;
 
-    // 積分項。Ki*integral が ±i_limit を超えないように積分値を制限する（アンチワインドアップ）
+    // 積分項。Ki*integral が ±i_limit を超えないように積分値を制限する（アンチワインドアップ）。
+    // 誤差が i_band を超えている間は積分を止めて値を保つ（手で押さえる・突風などで大きなずれが続いても積もらない）
     if (fabsf(Ki) > 1e-6f) {
-        integral += error * dt_cont;
+        if (fabsf(error) <= i_band) integral += error * dt_cont;
         float lim = i_limit / fabsf(Ki);
         if (integral > lim) integral = lim;
         if (integral < -lim) integral = -lim;
@@ -174,7 +181,10 @@ float PID::calculatePID(float current, float rate) {
     }
 
     // PID制御出力
-    return Kp * error + Ki * integral + Kd * derivative;
+    last_p = Kp * error;
+    last_i = Ki * integral;
+    last_d = Kd * derivative;
+    return last_p + last_i + last_d;
 }
 
 void Motion_control::getQuaternion(float* retbuf){

@@ -119,11 +119,26 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     [IDX_CHAR_CFG_G]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
     sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
+
+    /*Log Characteristic Declaration（通知だけ。値は送るたびに渡す）*/
+    [IDX_CHAR_H]      =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
+    CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_notify}},
+
+    [IDX_CHAR_VAL_H]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Log_Telem, ESP_GATT_PERM_READ,
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)nullptr}},
+
+    [IDX_CHAR_CFG_H]  =
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+    sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
 };
 
 loop_stats_t Ble_comm::loop_stats = {0, 0, 0};
 
-notify_target_t Ble_comm::notify_targets[7] = {
+volatile uint16_t Ble_comm::mtu = 23;
+
+notify_target_t Ble_comm::notify_targets[8] = {
     {0, 0, (uint8_t *)sensor_value, sizeof(float)*9, "A"}, // 加速度・ジャイロ・地磁気（Motion_control::sensor_telem）
     {0, 0, (uint8_t *)PRY_value, sizeof(float)*3, "B"},
     {0, 0, (uint8_t *)controlU, sizeof(float)*5, "C"},
@@ -131,6 +146,7 @@ notify_target_t Ble_comm::notify_targets[7] = {
     {0, 0, (uint8_t *)nullptr, 0, "E"},
     {0, 0, (uint8_t *)q, sizeof(float)*4, "F"},
     {0, 0, (uint8_t *)&Ble_comm::loop_stats, sizeof(loop_stats_t), "G"},
+    {0, 0, (uint8_t *)nullptr, 0, "H"}, // 記録（sendLog で送る）
 };
 
 Ble_comm::Ble_comm(float *sensor_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p, float *q_p) {
@@ -426,6 +442,7 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
             break;
         case ESP_GATTS_MTU_EVT:
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_MTU_EVT, MTU %d", param->mtu.mtu);
+            Ble_comm::mtu = param->mtu.mtu;
             break;
         case ESP_GATTS_CONF_EVT:
             //ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_CONF_EVT, status = %d, attr_handle %d", param->conf.status, param->conf.handle);
@@ -451,6 +468,7 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
         case ESP_GATTS_DISCONNECT_EVT:{
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, reason = 0x%x", param->disconnect.reason);
             Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id = 0xFFFF; // または -1
+            Ble_comm::mtu = 23;
             if (Ble_comm::disconnect_cb) {
                 Ble_comm::disconnect_cb();
             }
@@ -467,8 +485,8 @@ void Ble_comm::gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_
             }
             else {
                 ESP_LOGI(GATTS_TABLE_TAG, "create attribute table successfully, the number handle = %d",param->add_attr_tab.num_handle);
-                constexpr uint16_t cfg_indices[] = {IDX_CHAR_CFG_A, IDX_CHAR_CFG_B, IDX_CHAR_CFG_C, IDX_CHAR_CFG_D, IDX_CHAR_CFG_E, IDX_CHAR_CFG_F, IDX_CHAR_CFG_G};
-                constexpr uint16_t val_indices[] = {IDX_CHAR_VAL_A, IDX_CHAR_VAL_B, IDX_CHAR_VAL_C, IDX_CHAR_VAL_D, IDX_CHAR_VAL_E, IDX_CHAR_VAL_F, IDX_CHAR_VAL_G};
+                constexpr uint16_t cfg_indices[] = {IDX_CHAR_CFG_A, IDX_CHAR_CFG_B, IDX_CHAR_CFG_C, IDX_CHAR_CFG_D, IDX_CHAR_CFG_E, IDX_CHAR_CFG_F, IDX_CHAR_CFG_G, IDX_CHAR_CFG_H};
+                constexpr uint16_t val_indices[] = {IDX_CHAR_VAL_A, IDX_CHAR_VAL_B, IDX_CHAR_VAL_C, IDX_CHAR_VAL_D, IDX_CHAR_VAL_E, IDX_CHAR_VAL_F, IDX_CHAR_VAL_G, IDX_CHAR_VAL_H};
                 static_assert(sizeof(cfg_indices)/sizeof(cfg_indices[0]) == sizeof(notify_targets)/sizeof(notify_targets[0]), "notify_targets size mismatch");
                 for (size_t i = 0; i < sizeof(cfg_indices)/sizeof(cfg_indices[0]); ++i) {
                     notify_targets[i].cfg_handle = param->add_attr_tab.handles[cfg_indices[i]];
@@ -600,4 +618,12 @@ void Ble_comm::sendLoopStats(const loop_stats_t &stats){
     if (err != ESP_OK) {
         ESP_LOGW(GATTS_TABLE_TAG, "loop stats send failed: %s", esp_err_to_name(err));
     }
+}
+bool Ble_comm::sendLog(const uint8_t *data, uint16_t len){
+    notify_target_t &target = notify_targets[7];
+    if (target.val_handle == 0 || !isClientConnecting()) return false;
+    if (len > notifyPayloadMax()) return false; // MTUを超えると切り詰められるので送らない
+    esp_err_t err = esp_ble_gatts_send_indicate(profile_tab[PROFILE_APP_IDX].gatts_if, profile_tab[PROFILE_APP_IDX].conn_id,
+                                target.val_handle, len, const_cast<uint8_t *>(data), false);
+    return err == ESP_OK;
 }
