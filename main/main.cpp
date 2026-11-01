@@ -59,6 +59,7 @@
 #define CMD_LOG_START          23     // 記録の開始 [23, 秒 u8]。記録が終わると Log_Telem で送る
                                       // 目標角のステップ付き: [23, 秒 u8, 軸 u8, 振幅[°] i8, 開始[0.1s] u8, 終了[0.1s] u8]
 #define CMD_LOG_RESEND         24     // 記録の送り直し [24, 先頭のサンプル番号 u16, 個数 u16]。個数0ならヘッダから全部
+#define CMD_GAIN_SCHED         25     // スロットルによるゲインの切り替え [25, 軸 u8（bit0 pitch, bit1 roll, bit2 yaw）, 基準スロットル[%] float, b が0のスロットル[%] float]
 
 // 記録（flight_log.h）の設定
 #define LOG_MAX_SECONDS        10     // 1回の記録の上限[s]（メモリが足りなければもっと短くなる）
@@ -80,6 +81,7 @@
 // CMD_GAIN_READ の応答の種類（msg[1]）。KCは1行ずつ GAIN_KIND_KC_ROW0 + 行番号 で送る
 #define GAIN_KIND_PID           0
 #define GAIN_KIND_KC_ROW0       1
+#define GAIN_KIND_SCHED         6     // [21, 6, 軸 u8, 基準スロットル float, b が0のスロットル float]
 
 // ジャイロ校正の結果（Command の通知で返す）
 enum GyroCalibStatus : uint8_t {
@@ -261,6 +263,10 @@ static void service_flight_log()
         info.control_method = motion.ControlMethod;
         motion.getPIDGains(info.pid_gains);
         motion.getPIDTargets(info.targets);
+        GainSchedule sched = motion.getGainSchedule();
+        info.sched_mask = sched.axis_mask;
+        info.sched_t_ref = sched.t_ref;
+        info.sched_t_zero = sched.t_zero;
         uint32_t samples = (uint32_t)sec * 1000000u / info.period_us;
         // 前のステップが終わっていなければ、新しいステップは付けない（目標を戻す前に base を上書きしないように）
         bool use_step = log_step_req_deg != 0 && log_step_req_axis < 3 && !log_step_active;
@@ -326,8 +332,18 @@ static void send_status()
 
 // [CMD_GAIN_READ, GAIN_KIND_PID, pitch/roll/yaw の Kp Ki Kd]（float 9個）
 // [CMD_GAIN_READ, GAIN_KIND_KC_ROW0 + 行, KCの1行]（float 6個）を5行分
+// [CMD_GAIN_READ, GAIN_KIND_SCHED, 軸 u8, 基準スロットル float, b が0のスロットル float]
 static void send_gains()
 {
+    GainSchedule sched = motion.getGainSchedule();
+    char sched_msg[3 + sizeof(float) * 2];
+    sched_msg[0] = CMD_GAIN_READ;
+    sched_msg[1] = GAIN_KIND_SCHED;
+    sched_msg[2] = sched.axis_mask;
+    memcpy(&sched_msg[3], &sched.t_ref, sizeof(float));
+    memcpy(&sched_msg[3 + sizeof(float)], &sched.t_zero, sizeof(float));
+    bl_comm.sendMsg(sched_msg, sizeof(sched_msg));
+
     float pid[9];
     motion.getPIDGains(pid);
     char pid_msg[2 + sizeof(pid)];
@@ -417,6 +433,7 @@ static void control_task(void* arg)
 
         int64_t t0 = esp_timer_get_time();
         motion.setMotorRunning(Thrust->getPercent() > 0.0f);
+        motion.setThrottle(Thrust->getPercent());
         motion.update();
         motion.updateSensorTelem();
         if (++u_count >= CONTROL_U_DIV) {
@@ -513,6 +530,18 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
                 log_resend_first = first;
                 log_resend_count = count;
                 log_resend_requested = true;
+            }
+            break;
+        // スロットルによるゲインの切り替え。基準が b が0のスロットルより上でなければ受け付けない（倍率の分母が0以下になる）
+        case CMD_GAIN_SCHED:
+            if (msglen >= 2 + sizeof(float) * 2) {
+                float t_ref = read_float(&msg[2]), t_zero = read_float(&msg[2 + sizeof(float)]);
+                if (t_ref > t_zero + 1.0f && t_ref <= 100.0f && t_zero >= 0.0f) {
+                    motion.setGainSchedule(msg[1], t_ref, t_zero);
+                } else {
+                    ESP_LOGW(TAG, "gain schedule rejected: t_ref %.1f, t_zero %.1f", t_ref, t_zero);
+                }
+                gain_read_requested = true; // 結果をモニターに読み戻してもらう
             }
             break;
         // ゲインの読み戻し（送信はテレメトリタスクで行う）

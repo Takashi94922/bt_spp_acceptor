@@ -12,12 +12,26 @@ struct PID {
 	float target; // 目標値（セットポイント）
 	float i_limit = 10.0f; // 積分項の出力の上限[%]（アンチワインドアップ）。打ち消したい一定のトルクは約3%
 	float i_band = 5.0f * 0.0174533f; // [rad] 誤差がこれ以内のときだけ積分する（大きなずれはP・Dに任せる）
+	// ゲインに掛ける倍率（スロットルによるゲインの切り替え。Motion_control が毎周期決める）
+	float gain_scale = 1.0f;
 	// 直近の出力の内訳[%]（記録用）。PIDモード以外では0
 	float last_p = 0.0f, last_i = 0.0f, last_d = 0.0f;
 	// current: 現在の角度[rad]、rate: その角度の変化率[rad/s]（ジャイロから計算）
 	float calculatePID(float current, float rate);
 	void reset() { integral = 0.0f; }
 	void clearTerms() { last_p = last_i = last_d = 0.0f; }
+};
+
+// スロットルによるゲインの切り替え。舵の効き b はスロットルにほぼ比例する（b ∝ T − t_zero、2026-11-01 のロールの台試験）。
+// b·Kp・b·Ki・b·Kd を基準のスロットル t_ref のときと同じに保つよう、PID のゲインに
+//   s = (t_ref − t_zero) / (T − t_zero)
+// を掛ける。設定したゲインは t_ref でのゲインになる。t_ref 以下では s = 1（離陸前などに上げない）
+struct GainSchedule {
+	uint8_t axis_mask = 0;  // bit0: pitch, bit1: roll, bit2: yaw。0なら切り替えない
+	float t_ref = 30.0f;    // 基準のスロットル [%]
+	float t_zero = 7.1f;    // b が0になるスロットル [%]（直線の当てはめ）
+	static constexpr float scale_min = 0.2f; // 倍率の下限
+	float scale(float throttle) const;
 };
 class Motion_control{
 	LSM9DS1 imu;
@@ -100,6 +114,8 @@ public:
 	// [0..2] 加速度[m/s^2]、[3..5] ジャイロ[rad/s]、[6..8] 地磁気[gauss]
 	float sensor_telem[9] = {0};
 	PID pitch_pid, roll_pid, yaw_pid;
+	GainSchedule gain_sched;
+	float throttle_pct = 0.0f;  // 制御タスクが毎周期 setThrottle で設定する（ゲインの切り替え用）
 	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
 	uint8_t prev_method = 0;   // モードが変わったらPIDの内部状態をリセットする
 
@@ -128,4 +144,7 @@ public:
 	bool calibrateGyro(); // バイアスを測り直し、姿勢推定を素早く合わせ直す。静止していればtrue
 	void gyroImu(float *out);
 	void setMotorRunning(bool running) { motor_running = running; }
+	void setThrottle(float pct) { throttle_pct = pct; }
+	void setGainSchedule(uint8_t axis_mask, float t_ref, float t_zero);
+	GainSchedule getGainSchedule();
 };

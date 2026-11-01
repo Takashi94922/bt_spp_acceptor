@@ -73,6 +73,9 @@ size_t FlightLog::buildPacket(uint8_t *out, size_t max_len) const
         out[len++] = info.control_method;
         memcpy(&out[len], info.pid_gains, sizeof(info.pid_gains)); len += sizeof(info.pid_gains);
         memcpy(&out[len], info.targets, sizeof(info.targets)); len += sizeof(info.targets);
+        out[len++] = info.sched_mask;
+        memcpy(&out[len], &info.sched_t_ref, 4); len += 4;
+        memcpy(&out[len], &info.sched_t_zero, 4); len += 4;
         return len <= max_len ? len : 0;
     }
 

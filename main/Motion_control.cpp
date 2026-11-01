@@ -146,7 +146,11 @@ void Motion_control::calcU(){
 		clamp_servo(u, 0.0f, 100.0f);
 	}
 	else if (ControlMethod == 2) {
-		// PID制御を適用
+		// PID制御を適用。切り替える軸のゲインにはスロットルに応じた倍率を掛ける
+		float s = gain_sched.scale(throttle_pct);
+		pitch_pid.gain_scale = (gain_sched.axis_mask & 1) ? s : 1.0f;
+		roll_pid.gain_scale  = (gain_sched.axis_mask & 2) ? s : 1.0f;
+		yaw_pid.gain_scale   = (gain_sched.axis_mask & 4) ? s : 1.0f;
 		float xsrc[3];
 		xsrc[0] = pitch_pid.calculatePID(PRY_value[0], PRY_rate[0]);
 		xsrc[1] = roll_pid.calculatePID(PRY_value[1], PRY_rate[1]);
@@ -168,12 +172,13 @@ float PID::calculatePID(float current, float rate) {
     // 微分項。目標値を一定とみなし d(error)/dt = -rate とする。
     // 角度の差分と違って遅れとノイズがなく、目標値を変えても出力が跳ねない
     float derivative = -rate;
+    float kp = Kp * gain_scale, ki = Ki * gain_scale, kd = Kd * gain_scale;
 
     // 積分項。Ki*integral が ±i_limit を超えないように積分値を制限する（アンチワインドアップ）。
     // 誤差が i_band を超えている間は積分を止めて値を保つ（手で押さえる・突風などで大きなずれが続いても積もらない）
-    if (fabsf(Ki) > 1e-6f) {
+    if (fabsf(ki) > 1e-6f) {
         if (fabsf(error) <= i_band) integral += error * dt_cont;
-        float lim = i_limit / fabsf(Ki);
+        float lim = i_limit / fabsf(ki);
         if (integral > lim) integral = lim;
         if (integral < -lim) integral = -lim;
     } else {
@@ -181,9 +186,9 @@ float PID::calculatePID(float current, float rate) {
     }
 
     // PID制御出力
-    last_p = Kp * error;
-    last_i = Ki * integral;
-    last_d = Kd * derivative;
+    last_p = kp * error;
+    last_i = ki * integral;
+    last_d = kd * derivative;
     return last_p + last_i + last_d;
 }
 
@@ -275,6 +280,27 @@ void Motion_control::setKC(const uint8_t *src, uint16_t first, uint16_t count){
 	taskENTER_CRITICAL(&param_lock);
 	memcpy(&KC.data[first], src, sizeof(float) * count);
 	taskEXIT_CRITICAL(&param_lock);
+}
+
+float GainSchedule::scale(float throttle) const {
+	if (axis_mask == 0 || throttle <= t_ref || t_ref <= t_zero) return 1.0f;
+	float s = (t_ref - t_zero) / (throttle - t_zero);
+	return s < scale_min ? scale_min : s;
+}
+
+void Motion_control::setGainSchedule(uint8_t axis_mask, float t_ref, float t_zero){
+	taskENTER_CRITICAL(&param_lock);
+	gain_sched.axis_mask = axis_mask & 7;
+	gain_sched.t_ref = t_ref;
+	gain_sched.t_zero = t_zero;
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+GainSchedule Motion_control::getGainSchedule(){
+	taskENTER_CRITICAL(&param_lock);
+	GainSchedule g = gain_sched;
+	taskEXIT_CRITICAL(&param_lock);
+	return g;
 }
 
 void Motion_control::getPIDGains(float *out){

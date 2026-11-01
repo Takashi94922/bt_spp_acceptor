@@ -25,18 +25,21 @@ constexpr float FLIGHT_LOG_SCALE_RATE    = 1000.0f;
 
 // Log_Telem の通知の種類（先頭1バイト）
 enum FlightLogPacket : uint8_t {
-    FLIGHT_LOG_PKT_HEADER = 0, // [0, 版, 周期us u16, サンプル数 u16, サンプルのバイト数 u8, 制御モード u8, PIDゲイン float×9, 目標値 float×3]
+    FLIGHT_LOG_PKT_HEADER = 0, // [0, 版, 周期us u16, サンプル数 u16, サンプルのバイト数 u8, 制御モード u8, PIDゲイン float×9, 目標値 float×3,
+                               //  ゲインの切り替え: 軸 u8, 基準スロットル float, b が0のスロットル float]（版2から）
     FLIGHT_LOG_PKT_DATA   = 1, // [1, サンプル数 n u8, 先頭のサンプル番号 u16, サンプル×n]
     FLIGHT_LOG_PKT_END    = 2, // [2, サンプル数 u16]
 };
-constexpr uint8_t FLIGHT_LOG_VERSION = 1;
+constexpr uint8_t FLIGHT_LOG_VERSION = 2;
 
 // 記録開始時の条件（ヘッダで送る）
 struct FlightLogInfo {
     uint16_t period_us;
     uint8_t control_method;
-    float pid_gains[9];  // pitch roll yaw の順に Kp Ki Kd
+    float pid_gains[9];  // pitch roll yaw の順に Kp Ki Kd（基準スロットルでの値）
     float targets[3];    // pitch roll yaw [rad]
+    uint8_t sched_mask;  // スロットルによるゲインの切り替え（bit0 pitch, bit1 roll, bit2 yaw）
+    float sched_t_ref, sched_t_zero; // [%]
 };
 
 class FlightLog {
