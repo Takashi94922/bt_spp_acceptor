@@ -619,6 +619,11 @@ void Ble_comm::sendLoopStats(const loop_stats_t &stats){
         ESP_LOGW(GATTS_TABLE_TAG, "loop stats send failed: %s", esp_err_to_name(err));
     }
 }
+uint16_t Ble_comm::sendablePackets(){
+    if (!isClientConnecting()) return 0;
+    return esp_ble_get_cur_sendable_packets_num(profile_tab[PROFILE_APP_IDX].conn_id);
+}
+
 bool Ble_comm::sendLog(const uint8_t *data, uint16_t len){
     notify_target_t &target = notify_targets[7];
     if (target.val_handle == 0 || !isClientConnecting()) return false;

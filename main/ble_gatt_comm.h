@@ -150,6 +150,8 @@ public:
     bool sendLog(const uint8_t *data, uint16_t len);
     // 1回の通知で送れる最大のバイト数（MTU - 3）
     static uint16_t notifyPayloadMax() { return mtu - 3; }
+    // BLEコントローラの送信バッファに今すぐ入れられるパケット数（未接続なら0）
+    uint16_t sendablePackets();
 private:
     // BLE advertising/scan data
     static constexpr uint8_t RAW_ADV_DATA[21] = {

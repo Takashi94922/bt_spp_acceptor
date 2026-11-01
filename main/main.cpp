@@ -57,12 +57,16 @@
 #define CMD_GAIN_READ          21     // ゲインの読み戻し要求。PIDとKCの各行を同じ番号で Command の通知に返す
 #define CMD_KC_ROW4            22     // KCの5行目（S4）の書き込み。1〜4行目は 6〜9 番
 #define CMD_LOG_START          23     // 記録の開始 [23, 秒 u8]。記録が終わると Log_Telem で送る
+                                      // 目標角のステップ付き: [23, 秒 u8, 軸 u8, 振幅[°] i8, 開始[0.1s] u8, 終了[0.1s] u8]
 #define CMD_LOG_RESEND         24     // 記録の送り直し [24, 先頭のサンプル番号 u16, 個数 u16]。個数0ならヘッダから全部
 
 // 記録（flight_log.h）の設定
 #define LOG_MAX_SECONDS        10     // 1回の記録の上限[s]（メモリが足りなければもっと短くなる）
 #define LOG_PACKETS_PER_TICK   15     // テレメトリ周期1回で送る記録のパケット数の上限
-#define LOG_PACKET_INTERVAL_MS 10     // 記録のパケットの送信間隔（BLEの送信キューをあふれさせない）
+#define LOG_PACKET_INTERVAL_MS 10     // 記録のパケットの送信間隔
+// BLEコントローラの送信バッファがこれより少ないときは記録を送らない。
+// 送りすぎると状態の通知やコマンドへの応答が後ろに並んで遅れ、モニターのハートビートが途切れて緊急動作に入る
+#define LOG_RESERVED_PACKETS   4
 #define LOG_PACKET_MAX         (4 + 46 * 5) // 1パケットの上限[byte]。MTUが大きくてもサンプル5個まで
 
 // CMD_STATUS の flags
@@ -187,6 +191,20 @@ static volatile uint8_t log_start_seconds = 0;  // 0以外なら開始の要求
 static volatile bool log_resend_requested = false;
 static volatile uint16_t log_resend_first = 0, log_resend_count = 0;
 
+// 記録中に目標角をステップ状に変える（ゲイン調整用。手で傾けて放す代わり）。
+// 記録の開始から on_sample で目標を base + amp にし、off_sample で base に戻す。記録が終わったら必ず base に戻す
+struct LogStep {
+    uint8_t axis;              // 0:pitch 1:roll 2:yaw
+    float base, amp;           // [rad]
+    uint16_t on_sample, off_sample;
+    uint16_t sample;           // 記録の開始からのサンプル数
+};
+static LogStep log_step = {};
+static volatile bool log_step_active = false; // テレメトリタスクが立て、制御タスクが下ろす
+// BLEで受け取ったステップの要求（振幅0ならステップなし）
+static volatile uint8_t log_step_req_axis = 0, log_step_req_on = 0, log_step_req_off = 0;
+static volatile int8_t log_step_req_deg = 0;
+
 static int16_t to_fixed(float v, float scale)
 {
     float x = v * scale;
@@ -195,9 +213,24 @@ static int16_t to_fixed(float v, float scale)
     return (int16_t)lrintf(x);
 }
 
+// 記録中の目標角のステップを進める（制御タスクから、記録の直前に呼ぶ）
+static void update_log_step()
+{
+    if (!log_step_active) return;
+    if (!flight_log.isRecording()) {
+        motion.setPIDTarget(log_step.axis, log_step.base);
+        log_step_active = false;
+        return;
+    }
+    uint16_t n = log_step.sample++;
+    if (n == log_step.on_sample) motion.setPIDTarget(log_step.axis, log_step.base + log_step.amp);
+    if (n == log_step.off_sample) motion.setPIDTarget(log_step.axis, log_step.base);
+}
+
 // 制御周期ごとに1サンプル記録する（制御タスクから）
 static void record_flight_log()
 {
+    update_log_step();
     if (!flight_log.isRecording()) return;
     const PID *pids[] = {&motion.pitch_pid, &motion.roll_pid, &motion.yaw_pid};
     FlightLogSample s;
@@ -229,6 +262,18 @@ static void service_flight_log()
         motion.getPIDGains(info.pid_gains);
         motion.getPIDTargets(info.targets);
         uint32_t samples = (uint32_t)sec * 1000000u / info.period_us;
+        // 前のステップが終わっていなければ、新しいステップは付けない（目標を戻す前に base を上書きしないように）
+        if (log_step_req_deg != 0 && log_step_req_axis < 3 && !log_step_active) {
+            uint32_t per_ds = 100000u / info.period_us; // 0.1秒あたりのサンプル数
+            log_step.axis = log_step_req_axis;
+            log_step.base = info.targets[log_step.axis];
+            log_step.amp = log_step_req_deg * Motion_control::deg2rad;
+            log_step.on_sample = (uint16_t)(log_step_req_on * per_ds);
+            log_step.off_sample = (uint16_t)(log_step_req_off * per_ds);
+            log_step.sample = 0;
+            log_step_active = true;
+        }
+        log_step_req_deg = 0;
         flight_log.start((uint16_t)samples, info);
     }
     if (log_resend_requested) {
@@ -241,6 +286,7 @@ static void service_flight_log()
     size_t max_len = bl_comm.notifyPayloadMax();
     if (max_len > sizeof(pkt)) max_len = sizeof(pkt);
     for (int i = 0; i < LOG_PACKETS_PER_TICK && flight_log.hasPacket(); i++) {
+        if (bl_comm.sendablePackets() < LOG_RESERVED_PACKETS) break; // 送信が追いついていない。次の周期に回す
         size_t len = flight_log.buildPacket(pkt, max_len);
         if (len == 0) {
             ESP_LOGW(TAG, "log packet does not fit in MTU %u", (unsigned)(max_len + 3));
@@ -447,6 +493,14 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
             break;
         // 記録の開始・送り直し（処理はテレメトリタスクで行う）
         case CMD_LOG_START:
+            if (msglen >= 6) {
+                log_step_req_axis = msg[2];
+                log_step_req_deg = (int8_t)msg[3];
+                log_step_req_on = msg[4];
+                log_step_req_off = msg[5];
+            } else {
+                log_step_req_deg = 0;
+            }
             if (msg[1] > 0) log_start_seconds = msg[1];
             break;
         case CMD_LOG_RESEND:
