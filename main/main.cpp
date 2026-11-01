@@ -54,6 +54,7 @@
 #define CMD_GYRO_CALIB         19     // ジャイロのバイアス校正。結果は同じ番号で Command の通知に返す
 #define CMD_STATUS             20     // ドローン側の状態。TELEMETRY_PERIOD_MSごとに Command の通知で送る
 #define CMD_GAIN_READ          21     // ゲインの読み戻し要求。PIDとKCの各行を同じ番号で Command の通知に返す
+#define CMD_KC_ROW4            22     // KCの5行目（S4）の書き込み。1〜4行目は 6〜9 番
 
 // CMD_STATUS の flags
 #define STATUS_FLAG_FAILSAFE    (1 << 0) // 緊急動作中（BLE切断・ハートビート途絶）
@@ -332,9 +333,12 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         case 5:
             motion.setControlMethod(msg[1]);
             break;
+        // KCの1行（float 6個）。6〜9番が1〜4行目、CMD_KC_ROW4 が5行目
         case 6 ... 9:
+        case CMD_KC_ROW4:
             if (msglen >= 1+sizeof(float)*6) {
-                motion.setKC(&msg[1], (msg[0] - 6) * 6, 6);
+                int row = (msg[0] == CMD_KC_ROW4) ? 4 : msg[0] - 6;
+                motion.setKC(&msg[1], row * 6, 6);
             }
             break;
         case 10: {

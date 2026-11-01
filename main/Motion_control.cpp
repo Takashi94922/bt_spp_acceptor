@@ -30,9 +30,6 @@ void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_
 	roll_pid.dt_cont = dt_cont;
 	yaw_pid.dt_cont = dt_cont;
 
-    // ---- LPF設定 ----
-	alpha = 1.0f / (1.0f + 2.0f * 3.1415926f * fc * dt_imu); // LPFの係数計算
-
 	mag_div = (uint16_t)(sampleFreq / mag_odr + 0.5f);
 	if (mag_div < 1) mag_div = 1;
 	mag_count = 0;
@@ -379,24 +376,10 @@ void Motion_control::getPRY(float* retbuf){
     madgwick.retBodyAngles(body);
     float yaw = body[2] + 1.5707963267f; // 従来と同じくIMUのヨー角を基準にする
     if (yaw > 3.1415926535f) yaw -= 6.2831853071f;
-    float raw_pitch =  body[1] - PRY_offset[0];
-    float raw_roll  =  body[0] - PRY_offset[1];
-    float raw_yaw   = -yaw     - PRY_offset[2];
-
-    // ---- LPF用の内部状態 ----
-    static float flt_pitch = 0.0f;
-    static float flt_roll  = 0.0f;
-    static float flt_yaw   = 0.0f;
-
-    // ---- 一次LPF ----
-    flt_pitch = alpha * flt_pitch + (1.0f - alpha) * raw_pitch;
-    flt_roll  = alpha * flt_roll  + (1.0f - alpha) * raw_roll;
-    flt_yaw   = alpha * flt_yaw   + (1.0f - alpha) * raw_yaw;
-
-    // ---- 出力 ----
-    retbuf[0] = flt_pitch;
-    retbuf[1] = flt_roll;
-    retbuf[2] = flt_yaw;
+    // LPFはかけない（遅れを増やさないため。ノイズはMadgwick側で十分に落ちている）
+    retbuf[0] =  body[1] - PRY_offset[0]; // pitch
+    retbuf[1] =  body[0] - PRY_offset[1]; // roll
+    retbuf[2] = -yaw     - PRY_offset[2]; // yaw
 }
 
 // PRY_value の変化率[rad/s]をジャイロ（バイアス補正後）から求める。
