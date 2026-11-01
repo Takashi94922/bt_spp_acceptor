@@ -235,10 +235,22 @@ void Motion_control::update(){
 	m_imu(1, 0) = -imu.calcMag(imu.my);
 	m_imu(2, 0) = imu.calcMag(imu.mz);
 
+	if (motor_running) {
+		mag_resume_count = (uint32_t)(mag_resume_time / dt_imu);
+	} else if (mag_resume_count > 0) {
+		mag_resume_count--;
+	}
+	mag_in_use = (mag_resume_count == 0);
+
 	//IMU座標系で姿勢を計算	
-	madgwick.update(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
-				a_imu(0, 0), a_imu(1, 0), a_imu(2, 0),
-				m_imu(0, 0), m_imu(1, 0), m_imu(2, 0));
+	if (mag_in_use) {
+		madgwick.update(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
+					a_imu(0, 0), a_imu(1, 0), a_imu(2, 0),
+					m_imu(0, 0), m_imu(1, 0), m_imu(2, 0));
+	} else {
+		madgwick.updateIMU(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
+					a_imu(0, 0), a_imu(1, 0), a_imu(2, 0));
+	}
 	if (beta_init_count > 0 && --beta_init_count == 0) {
 		madgwick.setBeta(beta_run);
 	}

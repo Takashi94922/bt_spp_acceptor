@@ -59,6 +59,7 @@
 #define STATUS_FLAG_FAILSAFE    (1 << 0) // 緊急動作中（BLE切断・ハートビート途絶）
 #define STATUS_FLAG_CALIBRATING (1 << 1) // ジャイロ校正中
 #define STATUS_FLAG_HEARTBEAT   (1 << 2) // ハートビートの監視が有効
+#define STATUS_FLAG_MAG         (1 << 3) // 姿勢推定に地磁気を使っている（モーター停止中）
 
 // CMD_GAIN_READ の応答の種類（msg[1]）。KCは1行ずつ GAIN_KIND_KC_ROW0 + 行番号 で送る
 #define GAIN_KIND_PID           0
@@ -183,6 +184,7 @@ static void send_status()
     if (failsafe_active) flags |= STATUS_FLAG_FAILSAFE;
     if (gyro_calibrating) flags |= STATUS_FLAG_CALIBRATING;
     if (heartbeat_armed) flags |= STATUS_FLAG_HEARTBEAT;
+    if (motion.mag_in_use) flags |= STATUS_FLAG_MAG;
 
     float values[4];
     values[0] = Thrust->getPercent();
@@ -289,6 +291,7 @@ static void control_task(void* arg)
         if (pending > 1) ctrl_overrun_count = ctrl_overrun_count + (pending - 1);
 
         int64_t t0 = esp_timer_get_time();
+        motion.setMotorRunning(Thrust->getPercent() > 0.0f);
         motion.update();
         motion.filterUpdate();
         if (++u_count >= CONTROL_U_DIV) {

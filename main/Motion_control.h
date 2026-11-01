@@ -127,6 +127,13 @@ public:
 	uint16_t mag_div = 1;   // 何回に1回磁気を読むか
 	uint16_t mag_count = 0;
 
+	// モーターの磁場で地磁気が大きく乱れる（10%で地磁気そのものより大きい）ので、
+	// モーターが回っている間と止めた直後は地磁気を使わず、加速度とジャイロの6軸で推定する
+	static constexpr float mag_resume_time = 1.0f; // [s] モーターが止まってからこの時間たったら地磁気を使う
+	bool motor_running = false;    // 制御タスクが毎周期 setMotorRunning で設定する
+	uint32_t mag_resume_count = 0;
+	bool mag_in_use = true;        // 直近の推定で地磁気を使ったか（状態の返送用）
+
 	float gv[3] = {0.0, 0.0, -gravity_c};
 	float g_bias[3] = {0};   // ジャイロのバイアス[rad/s]（IMU座標、符号反転後）
 
@@ -206,5 +213,6 @@ public:
 	bool calibrateGyroBias(uint16_t samples);
 	bool calibrateGyro(); // バイアスを測り直し、姿勢推定を素早く合わせ直す。静止していればtrue
 	void gyroImu(float *out);
+	void setMotorRunning(bool running) { motor_running = running; }
 	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);
 };
