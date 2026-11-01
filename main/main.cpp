@@ -263,7 +263,8 @@ static void service_flight_log()
         motion.getPIDTargets(info.targets);
         uint32_t samples = (uint32_t)sec * 1000000u / info.period_us;
         // 前のステップが終わっていなければ、新しいステップは付けない（目標を戻す前に base を上書きしないように）
-        if (log_step_req_deg != 0 && log_step_req_axis < 3 && !log_step_active) {
+        bool use_step = log_step_req_deg != 0 && log_step_req_axis < 3 && !log_step_active;
+        if (use_step) {
             uint32_t per_ds = 100000u / info.period_us; // 0.1秒あたりのサンプル数
             log_step.axis = log_step_req_axis;
             log_step.base = info.targets[log_step.axis];
@@ -271,10 +272,11 @@ static void service_flight_log()
             log_step.on_sample = (uint16_t)(log_step_req_on * per_ds);
             log_step.off_sample = (uint16_t)(log_step_req_off * per_ds);
             log_step.sample = 0;
-            log_step_active = true;
         }
         log_step_req_deg = 0;
-        flight_log.start((uint16_t)samples, info);
+        // ステップは記録が始まってから有効にする。先に有効にすると、start() の間（メモリ確保やログ出力で数ms）に
+        // 制御タスクが「記録中でない＝記録が終わった」とみなして、ステップを取り消してしまう
+        if (flight_log.start((uint16_t)samples, info) > 0 && use_step) log_step_active = true;
     }
     if (log_resend_requested) {
         log_resend_requested = false;
