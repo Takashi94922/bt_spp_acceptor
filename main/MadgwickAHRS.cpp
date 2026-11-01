@@ -21,6 +21,7 @@
 
 #include "MadgwickAHRS.h"
 #include <math.h>
+#include <bit>
 
 //-------------------------------------------------------------------------------------------
 // Definitions
@@ -234,9 +235,11 @@ void Madgwick::updateBodyQuaternion() {
 float Madgwick::invSqrt(float x) {
 	float halfx = 0.5f * x;
 	float y = 0.0f;
-	int32_t i = *(int32_t*)&x;
+	// floatのビット列を整数として扱う。ポインタのキャストは strict aliasing 違反なので std::bit_cast を使う
+	// （memcpy は -Os だと関数呼び出しのまま残り遅い。bit_cast はレジスタ間の移動だけになる）
+	int32_t i = std::bit_cast<int32_t>(x);
 	i = 0x5f3759df - (i>>1);
-	y = *(float*)&i;
+	y = std::bit_cast<float>(i);
 	y = y * (1.5f - (halfx * y * y));
 	y = y * (1.5f - (halfx * y * y));
 	return y;
@@ -262,43 +265,4 @@ void Madgwick::retBodyAngles(float *rv)
 	if (sp < -1.0f) sp = -1.0f;
 	rv[1] = asinf(sp);
 	rv[2] = atan2f(qb1*qb2 + qb0*qb3, 0.5f - qb2*qb2 - qb3*qb3);
-}
-void Madgwick::calcW(){
-	wx = 2.0 *(qDot1 * q3 + qDot2 * q2 - qDot3 * q1 - qDot4 * q0);
-	wy = 2.0 *(qDot2 * q3 + qDot3 * q0 - qDot1 * q2 - qDot4 * q1);
-	wz = 2.0 *(qDot3 * q3 + qDot1 * q1 - qDot2 * q0 - qDot4 * q2);
-}
-
-void Madgwick::trans(float *rv, float *v){
-    // q = (q0, q1, q2, q3)
-    float vx = v[0];
-    float vy = v[1];
-    float vz = v[2];
-
-    // t = 2 * cross(q.xyz, v)
-    float tx = 2.0f * (q2 * vz - q3 * vy);
-    float ty = 2.0f * (q3 * vx - q1 * vz);
-    float tz = 2.0f * (q1 * vy - q2 * vx);
-
-    // v' = v + q0 * t + cross(q.xyz, t)
-    rv[0] = vx + q0 * tx + (q2 * tz - q3 * ty);
-    rv[1] = vy + q0 * ty + (q3 * tx - q1 * tz);
-    rv[2] = vz + q0 * tz + (q1 * ty - q2 * tx);
-}
-
-void Madgwick::trans2body(float *rv, float *v){
-    // --- 2) 次に、q_body でベクトル v を回転 ---
-    float vx = v[0];
-    float vy = v[1];
-    float vz = v[2];
-
-    // t = 2 * cross(q.xyz, v)
-    float tx = 2.0f * (qb2 * vz - qb3 * vy);
-    float ty = 2.0f * (qb3 * vx - qb1 * vz);
-    float tz = 2.0f * (qb1 * vy - qb2 * vx);
-
-    // v' = v + q0 * t + cross(q.xyz, t)
-    rv[0] = vx + qb0 * tx + (qb2 * tz - qb3 * ty);
-    rv[1] = vy + qb0 * ty + (qb3 * tx - qb1 * tz);
-    rv[2] = vz + qb0 * tz + (qb1 * ty - qb2 * tx);
 }

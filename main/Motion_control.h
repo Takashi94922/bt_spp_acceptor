@@ -5,7 +5,6 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 
-#define TAG "MOTION"
 struct PID {
 	float Kp, Ki, Kd;
 	float dt_cont;
@@ -19,59 +18,8 @@ struct PID {
 class Motion_control{
 	LSM9DS1 imu;
 	Madgwick madgwick;
-	dspm::Mat trans;
-	//Body座標系でみたときの重心位置[m]
-	//float x_IMU_src[3] = {41.254E-3, 1.061E-3, 53.987E-3};
-	float x_IMU_src[3] = {56.268E-3, 0.01E-3, -9.529E-3};
-	dspm::Mat x_IMU = dspm::Mat(x_IMU_src, 3,1);
-
-	float g_prev_src[3] = {0.0f, 0.0f, 0.0f};
-	dspm::Mat g_prev = dspm::Mat(g_prev_src, 3,1);
-
-	//X字の時のIMUから見たベクトル
-/* 	float IMU2body_src[9] = {
-		0, 0, -1,
-		-1, 0, 0,
-		0, -1, 0
-	}; */
-	
-	//Vertの時のIMUから見たベクトル
-	float IMU2body_src[9] = {
-		0, 0, 1,
-		1, 0, 0,
-		0, 1, 0
-	};
-	dspm::Mat IMU_2_body = dspm::Mat(IMU2body_src, 3, 3);
 public:
 	Motion_control(){
-		float Bsrc[] = {
-			0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0,
-
-			0, -225.0f*3.1415f/100.0f/mass, -225.0f*3.1415f/100.0f/mass, 225.0f*3.1415f/100.0f/mass, 225.0f*3.1415f/100.0f/mass,
-			0, 225.0f*3.1415f/100.0f/mass, -225.0f*3.1415f/100.0f/mass, -225.0f*3.1415f/100.0f/mass, 225.0f*3.1415f/100.0f/mass,
-			1.69f/100.0f/mass, 0, 0, 0, 0,
-		};
-		B = dspm::Mat(Bsrc, 6, 5);
-
-		float Qsrc[] = {
-			0.0003, 0, 0, 0, 0, 0,
-			0, 0.0003, 0, 0, 0, 0,
-			0, 0, 0.0003, 0, 0, 0,
-			0, 0, 0, 0.0003, 0, 0, 
-			0, 0, 0, 0, 0.0003, 0, 		
-			0, 0, 0, 0, 0, 0.0003
-		};
-		Q = dspm::Mat(Qsrc, 6, 6);
-
-		float Rsrc[] = {
-			0.5, 0, 0,
-			0, 0.5, 0,
-			0, 0, 0.5,
-		};
-		R = dspm::Mat(Rsrc, 3, 3);
-
 		for (int i = 0; i < 5; i++)
 		{
 			u(i, 0) = 0.0;	
@@ -86,14 +34,7 @@ public:
 		};
 		KC = dspm::Mat(KCsrc, 5, 6);
 
-		//{pitch roll yaw}
-/* 		float KPIDsrc[] = {
-			0,0,0,
-			1, 1, 0,
-			-1, 1, 0,
-			-1, -1, 0,
-			1, -1, 0,	
-		}; */
+		// PIDの出力（列: pitch roll yaw）をサーボ（行: u0=推力（未使用）, u1～u4）に配分する
 		float KPIDsrc[] = {
 			0,0,0,
 			-1, 1, 1,
@@ -114,7 +55,6 @@ public:
 	static constexpr float gravity_c = 9.80665;
 	static constexpr float deg2rad = 0.0174533;
 	static constexpr float rad2deg = 1.0/deg2rad;
-	static constexpr float mass = 1.66f;
 	float dt_imu = 10E-3;
 	float dt_cont = 1.0f;
 
@@ -130,7 +70,6 @@ public:
 	uint32_t mag_resume_count = 0;
 	bool mag_in_use = true;        // 直近の推定で地磁気を使ったか（状態の返送用）
 
-	float gv[3] = {0.0, 0.0, -gravity_c};
 	float g_bias[3] = {0};   // ジャイロのバイアス[rad/s]（IMU座標、符号反転後）
 
 	// Madgwickのβ。起動直後は大きくして加速度・磁気の向きに素早く合わせ、その後通常値に戻す
@@ -142,43 +81,20 @@ public:
 	// 起動時のジャイロバイアス測定
 	static constexpr uint16_t gyro_calib_samples = 500;
 	static constexpr float gyro_still_std = 1.0f * deg2rad; // これ以上ばらつくと「動いていた」とみなす[rad/s]
-	dspm::Mat a_grav = dspm::Mat(3, 1);
-	dspm::Mat a = dspm::Mat(3, 1);
-	dspm::Mat g = dspm::Mat(3, 1);
-	dspm::Mat m = dspm::Mat(3, 1);
-	dspm::Mat v = dspm::Mat(3, 1);
-	dspm::Mat p = dspm::Mat(3, 1);
-	dspm::Mat y = dspm::Mat(3, 1);
-	dspm::Mat d_omega = dspm::Mat(4, 4);
-	dspm::Mat q = dspm::Mat(4, 1);
-	dspm::Mat dq = dspm::Mat(4, 1);
-	dspm::Mat u = dspm::Mat(5, 1);
-	dspm::Mat a_imu = dspm::Mat(3, 1);
-	dspm::Mat g_imu = dspm::Mat(3, 1);
-	dspm::Mat m_imu = dspm::Mat(3, 1);
-	dspm::Mat gv_imu = dspm::Mat(3, 1);
-	dspm::Mat centripetal = dspm::Mat(3, 1);
-	dspm::Mat ga = dspm::Mat(3, 1);
-	dspm::Mat tangential = dspm::Mat(3, 1);
-	dspm::Mat skewM = dspm::Mat(3, 3);
-	dspm::Mat Phi = dspm::Mat(6, 6);
-	dspm::Mat temp = dspm::Mat(6, 6);
-	dspm::Mat F = dspm::Mat(6, 6);
-	dspm::Mat H = dspm::Mat(3, 6);
-	dspm::Mat K = dspm::Mat(6, 3);
+	dspm::Mat q = dspm::Mat(4, 1);     // IMU座標の姿勢クォータニオン（BLEで送る）
+	dspm::Mat u = dspm::Mat(5, 1);     // 制御出力 u0=推力（未使用）, u1～u4=サーボ[%]
+	// IMU座標のセンサ値（符号変換・バイアス補正の後）
+	dspm::Mat a_imu = dspm::Mat(3, 1); // 加速度[m/s^2]
+	dspm::Mat g_imu = dspm::Mat(3, 1); // 角速度[rad/s]
+	dspm::Mat m_imu = dspm::Mat(3, 1); // 地磁気[gauss]
 	//単位はrad
 	float PRY_value[3] = {0};
 	float PRY_offset[3] = {0};  // 初期角度オフセット
 	float PRY_rate[3] = {0};    // PRY_value の変化率[rad/s]（ジャイロから計算、LPFなし）。PIDのD項に使う
-	dspm::Mat B, Q, R, KC, KPID;
-	float *KCsrc = KC.data;
-	dspm::Mat P = dspm::Mat::eye(6);
-	dspm::Mat xhat = dspm::Mat(6, 1);
+	dspm::Mat KC, KPID;
 	// BLE（Sensor_Telem）で送るセンサ値。IMU座標で符号変換・バイアス補正の後
 	// [0..2] 加速度[m/s^2]、[3..5] ジャイロ[rad/s]、[6..8] 地磁気[gauss]
 	float sensor_telem[9] = {0};
-	float gdot[3] = {0};
-	float thetadot[3] = {0};
 	PID pitch_pid, roll_pid, yaw_pid;
 	uint8_t ControlMethod = 0; // 0: None, 1: KC, 2: PID
 	uint8_t prev_method = 0;   // モードが変わったらPIDの内部状態をリセットする
@@ -188,9 +104,7 @@ public:
 	portMUX_TYPE param_lock = portMUX_INITIALIZER_UNLOCKED;
 
 	void begin(float sampleFreq, float Control_freq, i2c_master_bus_handle_t bus_handle);
-    void skew(dspm::Mat &v );
-	void Sensor2Body();
-    void filterUpdate();
+    void updateSensorTelem(); // sensor_telem を最新のセンサ値で埋める
     void update();
     void calcU();
 	//単位はrad
@@ -210,5 +124,4 @@ public:
 	bool calibrateGyro(); // バイアスを測り直し、姿勢推定を素早く合わせ直す。静止していればtrue
 	void gyroImu(float *out);
 	void setMotorRunning(bool running) { motor_running = running; }
-	void rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a);
 };

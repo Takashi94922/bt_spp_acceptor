@@ -8,17 +8,7 @@
 #include "dsp_platform.h"
 #include "mat.h"
 
-#define FLIGHT_MODE_VERT // 0:Vert 1:X
-//#define FLIGHT_MODE_X // 0:KC 1:PID 2:Future reserved
-
-// 3×1 行列から 3×3 のスキュー対称行列を生成
-void Motion_control::skew( dspm::Mat &v )
-{
-	// v(i,0) は i 行目の要素
-	skewM(0,0) =  0;         skewM(0,1) = -v(2,0);  skewM(0,2) =  v(1,0);
-	skewM(1,0) =  v(2,0);    skewM(1,1) =  0;       skewM(1,2) = -v(0,0);
-	skewM(2,0) = -v(1,0);    skewM(2,1) =  v(0,0);  skewM(2,2) =  0;
-}
+static const char *TAG = "MOTION";
 
 void Motion_control::begin(float sampleFreq, float Control_freq, i2c_master_bus_handle_t bus_handle){
  	if(imu.begin(LSM9DS1_AG_ADDR(0), LSM9DS1_M_ADDR(0), bus_handle) == 0){
@@ -47,166 +37,13 @@ bool Motion_control::calibrateGyro(){
 	return still;
 }
 
-void Motion_control::Sensor2Body(){
-	//imu座標から機体座標系
-	//※LSM9DS1のg/aは左手系でmは右手系
-	a = IMU_2_body * a_imu;
-	g = IMU_2_body * g_imu;
-	m = IMU_2_body * m_imu;
-
-	skew(g);
-	centripetal = skewM * (skewM * x_IMU);
-
-	ga = ((g - g_prev) * (1.0f /dt_imu));
-    skew(ga);
-	tangential = skewM * x_IMU;
-	//a = a - centripetal - tangential; //重心の座標系に変換
-
-	g_prev = g;
-}
-
-void Motion_control::filterUpdate(){
-	//Kalman Filterの更新処理だが、ESP32の性能を考慮して、計算はテレメトリ先で行う。
-	// テレメトリ先で計算するためのセンサ値
+// テレメトリで送るセンサ値（IMU座標、符号変換・バイアス補正の後）
+void Motion_control::updateSensorTelem(){
 	for (int i = 0; i < 3; i++) {
 		sensor_telem[i] = a_imu(i, 0);
 		sensor_telem[3 + i] = g_imu(i, 0);
 		sensor_telem[6 + i] = m_imu(i, 0);
 	}
-
-	//以下はESP32で計算するばあいのコード。
-	/* 	
-	//imu->機体座標の変換＋向心力の補正
-	Sensor2Body();
-
-	//姿勢から重力の分力を減算
-	//地球からbody座標に変換
-	float gv_imusrc[3];
-	madgwick.trans2body(gv_imusrc, gv);
-	a_grav(0, 0) = gv_imusrc[0];
-	a_grav(1, 0) = gv_imusrc[1];
-	a_grav(2, 0) = gv_imusrc[2];
-	//imuから機体に変換
-	//a_grav = IMU_2_body * gv_imu;
-	//重力加速度を引く
-	a = a - a_grav;
-
-	//ESP_LOGD(TAG, "kalman Start");
-	//x = F*x + B*u + Q
-	//y = H*x
-	
-	//角速度の変化率
-	madgwick.calcW();
-
-	//xの代入
-	//x = [vx, vy, vz, px, py , pz]';
-
-	//まず q = [q0, q1, q2, q3]^T
-	q(0, 0) = madgwick.qb0;
-	q(1, 0) = madgwick.qb1;
-	q(2, 0) = madgwick.qb2;
-	q(3, 0) = madgwick.qb3;
-
-    // 2) 世界座標系の加速度
-    dspm::Mat acc_world(3,1);
-    rotate(acc_world, q, a);      // a: 3x1 (body)
-    acc_world(2,0) += 9.80665f;   // 座標系に応じて符号調整
-
-    // 3) 状態の取り出し
-    float vx = xhat(0,0);
-    float vy = xhat(1,0);
-    float vz = xhat(2,0);
-    float px = xhat(3,0);
-    float py = xhat(4,0);
-    float pz = xhat(5,0);
-
-    // 4) 予測更新
-    vx += acc_world(0,0) * dt_imu;
-    vy += acc_world(1,0) * dt_imu;
-    vz += acc_world(2,0) * dt_imu;
-
-    px += vx * dt_imu + 0.5f * acc_world(0,0) * dt_imu * dt_imu;
-    py += vy * dt_imu + 0.5f * acc_world(1,0) * dt_imu * dt_imu;
-    pz += vz * dt_imu + 0.5f * acc_world(2,0) * dt_imu * dt_imu;
-
-    xhat(0,0) = vx;
-    xhat(1,0) = vy;
-    xhat(2,0) = vz;
-    xhat(3,0) = px;
-    xhat(4,0) = py;
-    xhat(5,0) = pz;
-
-	//F
-	F.clear();
-
-	// --- ṗ = v ---
-	F(3,0) = 1.0f;
-	F(4,1) = 1.0f;
-	F(5,2) = 1.0f;
-	
-	//phi = I + F dt
-	Phi = dspm::Mat::eye(6);
-	Phi += F * dt_imu;
-
-	// --- P = Φ P Φᵀ + Q ---
-	// temp = Φ * P
-	temp = Phi * P;
-
-	// P = temp * Φᵀ
-	P = temp * Phi.t();
-
-	// Q を加算（プロセスノイズ）
-	P = P + Q;
-
-	//y= [ax ay az];
-	// 世界座標系の加速度に変換
-	y(0, 0) = acc_world(0, 0);
-	y(1, 0) = acc_world(1, 0);
-	y(2, 0) = acc_world(2, 0);
-
-	//H
-	H.clear();
-	// --- 加速度観測（0..2 行）---
-	H(0, 0) = 0.00f;
-	H(1, 1) = 0.0f;
-	H(2, 2) = 0.0f;
-
-	//K = P*H'*(R + H*P*H')^-1
-	K = P*H.t()*(R + H*P*H.t()).inverse();
-
-	//xhat = xhat + K(y-Hx)
-	xhat += K*(y-H*xhat);
-
-	//P = (I-KH)P
-	P = (dspm::Mat::eye(6) - K*H)*P;
-	//ESP_LOGI(TAG, "Kalman Updated"); */
-}
-
-// out = R(q) * a
-// q: 4x1 (q0,q1,q2,q3)
-// a: 3x1 (ax,ay,az)
-// out: 3x1 (結果)
-
-void Motion_control::rotate(dspm::Mat &out, const dspm::Mat &q, const dspm::Mat &a)
-{
-	float w = q(0,0);
-	float x = q(1,0);
-	float y = q(2,0);
-	float z = q(3,0);
-
-	float ax = a(0,0);
-	float ay = a(1,0);
-	float az = a(2,0);
-
-	// 2*(q_vec × a)
-	float t2x = 2.0f * ( y*az - z*ay );
-	float t2y = 2.0f * ( z*ax - x*az );
-	float t2z = 2.0f * ( x*ay - y*ax );
-
-	// out = a + w*t2 + q_vec × t2
-	out(0,0) = ax + w*t2x + ( y*t2z - z*t2y );
-	out(1,0) = ay + w*t2y + ( z*t2x - x*t2z );
-	out(2,0) = az + w*t2z + ( x*t2y - y*t2x );
 }
 
 void Motion_control::update(){
@@ -256,10 +93,8 @@ void Motion_control::update(){
 	getPRY(PRY_value);
 	getPRYrate(PRY_rate);
 	getQuaternion(q.data);
-
-	//ESP_LOGI(TAG, "raw%1.2f,%1.2f,%1.2f", a(0, 0), a(1, 0), a(2, 0));
-	//ESP_LOGI(TAG, "u%2.1f,%2.1f,%2.1f", u(1, 0), u(2, 0), u(3, 0));
 }
+
 // out = scale * M * x + offset をoutに直接書き込む
 // dspm::Matの演算子は一時行列をヒープ確保するので、制御周期ごとの計算ではこちらを使う
 static void mat_vec_affine(dspm::Mat &out, const dspm::Mat &M, const float *x, float scale, float offset)
@@ -301,12 +136,8 @@ void Motion_control::calcU(){
 	if (ControlMethod == 0 || ControlMethod == 1) {
 		// 状態は機体座標の姿勢角（PIDと共通の目標値との差）。x1～x3 と x6 は推定していないので0
 		float xsrc[] = {0, 0, 0, PRY_value[0] - pitch_pid.target, PRY_value[1] - roll_pid.target, 0};
-		#ifdef FLIGHT_MODE_X
-			mat_vec_affine(u, KC, xsrc, -1.0f, 75.0f);
-		#elif defined(FLIGHT_MODE_VERT)
-			mat_vec_affine(u, KC, xsrc, -1.0f, 50.0f);
-			clamp_servo(u, 0.0f, 100.0f);
-		#endif
+		mat_vec_affine(u, KC, xsrc, -1.0f, 50.0f);
+		clamp_servo(u, 0.0f, 100.0f);
 	}
 	else if (ControlMethod == 2) {
 		// PID制御を適用
@@ -315,15 +146,9 @@ void Motion_control::calcU(){
 		xsrc[1] = roll_pid.calculatePID(PRY_value[1], PRY_rate[1]);
 		xsrc[2] = yaw_pid.calculatePID(PRY_value[2], PRY_rate[2]);
 
-		#ifdef FLIGHT_MODE_X
-			// 制御出力を使用して次の処理を実行
-			mat_vec_affine(u, KPID, xsrc, 1.0f, 75.0f);
-			clamp_servo(u, 50.0f, 100.0f);
-		#elif defined(FLIGHT_MODE_VERT)
-			// V字のモードは、u(1,0)～u(4,0)を0～100の範囲にクランプ
-			mat_vec_affine(u, KPID, xsrc, 1.0f, 50.0f);
-			clamp_servo(u, 0.0f, 100.0f);
-		#endif
+		// サーボは中立50%を中心に、u(1,0)～u(4,0)を0～100の範囲にクランプ
+		mat_vec_affine(u, KPID, xsrc, 1.0f, 50.0f);
+		clamp_servo(u, 0.0f, 100.0f);
 	}
 	else if(ControlMethod == 3){
 		//future reserved
@@ -361,18 +186,7 @@ void Motion_control::getQuaternion(float* retbuf){
 
 // PRY値を取得する関数単位はrad
 void Motion_control::getPRY(float* retbuf){
-	//IMU座標系から機体座標系の姿勢角を取得する
 	//retbufの順番は pitch roll yaw
-	//X字
-/* 	retbuf[0] = -(madgwick.getRollRadians() - 1.5707963267f); // pitch
-	retbuf[1] =  (madgwick.getPitchRadians() - PRY_offset[1]); // roll
-	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw */
-	//V字
-	/*
- 	retbuf[0] = (madgwick.getRollRadians() - 1.5707963267f); // pitch
-	retbuf[1] =  -(madgwick.getPitchRadians() - PRY_offset[1]); // roll
-	retbuf[2] = -(madgwick.getYawRadians() - PRY_offset[2]); // yaw
-*/
 
     // ---- 機体座標の姿勢角（V字配置）----
     // Madgwick側で q_body = q_imu ⊗ q_mount を計算済みなので、機体姿勢のオイラー角をそのまま使う。
@@ -389,7 +203,7 @@ void Motion_control::getPRY(float* retbuf){
 }
 
 // PRY_value の変化率[rad/s]をジャイロ（バイアス補正後）から求める。
-// 機体座標の角速度（機体x=IMU z、機体y=IMU x、機体z=IMU y、IMU_2_body と同じ）を
+// 機体座標の角速度（機体x=IMU z、機体y=IMU x、機体z=IMU y、Madgwick の取付クォータニオンと同じ）を
 // ZYXオイラー角の変化率に直し、getPRY と同じ並びと符号にする
 void Motion_control::getPRYrate(float* retbuf){
 	float p = g_imu(2, 0); // 機体x軸まわり

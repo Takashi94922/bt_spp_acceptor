@@ -364,3 +364,18 @@
 - ESP: vert を main に早送りで統合。モニター: ContentView を master に早送りで統合
 - 積分のリセットは実機未確認のままコミット
 - 次: ゲイン調整環境の段階1（制御周期での記録と CSV 保存）。ジンバル台（ピッチかロールの1軸だけ回転、固定軸側にわずかな角度オフセットあり）で試験する
+
+## 2026-11-01 コードの整理（ESP） 開始
+- 段階1の前に、使っていないコードを消す。動作は変えない。SPPモードとX字モードも削除（ユーザー指示）
+
+### 結果（2026-11-01）
+- カルマンフィルタの残骸を削除: `xhat`・`P`・`B`・`Q`・`R`・`F`・`H`・`K` など未使用の行列、`Sensor2Body()`・`skew()`・`rotate()`、`x_IMU`・`IMU_2_body`・`mass`・`gv` など
+- `filterUpdate()` を `updateSensorTelem()` に改名（中身は sensor_telem を埋めるだけ）
+- X字モード（`FLIGHT_MODE_X`）と `getPRY()` の古い式（コメントアウト）を削除
+- BT SPPモード（`COMM_MODE_BT_SPP`）と `bl_comm.cpp/.h` を削除。sdkconfig は元から BLE のみ
+- Madgwick: 未使用の `calcW()`・`trans()`・`trans2body()`・`wx/wy/wz` を削除。`invSqrt` のポインタキャスト（strict aliasing 違反の警告）を `std::bit_cast` に変更（計算結果は同じ）。最初は memcpy にしたが、-Os では memcpy が関数呼び出しのまま残っていた（逆アセンブルで確認、update 1回で約14回の呼び出し）
+- `TAG` の二重定義の警告: Motion_control.h の `#define TAG` をやめ、Motion_control.cpp 内の `static const char *TAG` にした。main.cpp のログタグは "ESP_SPP_DRONE" → "DRONE"
+- `sendMsg()` の引数を `const char*` に（文字列定数を渡す警告）。"Unknown command." の長さが 1 文字足りなかったのも修正
+- 393 行削除、51 行追加。ESP ビルド成功。残る警告は ESP-IDF の構造体の初期化子の省略（-Wmissing-field-initializers、省略したメンバーは 0 になるので無害）のみ
+- 注: `ControlMethod == 0`（なし）でも KC の計算は行っている（サーボには出さない）。今回は変更していない
+- 実機確認（机上）: 動作は問題なし。ただし制御ループの最大処理時間が約1100us（+80us）に増えた（ユーザー報告）→ memcpy を bit_cast にして再ビルド。再測定で約1050us（整理前の約1020usとの差30usは、1秒間の最大値のぶれの範囲と思われる）

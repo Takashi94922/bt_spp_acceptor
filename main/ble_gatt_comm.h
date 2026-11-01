@@ -138,7 +138,7 @@ public:
         Ble_comm::gain_update_cb = gain_update_cb_p;
     }
     static bool isConnecting, isWriting;
-    void sendMsg(char *msg, unsigned char len);
+    void sendMsg(const char *msg, unsigned char len);
     void sendTelemetry();
     void sendLoopStats(const loop_stats_t &stats);
 private:

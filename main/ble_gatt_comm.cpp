@@ -555,7 +555,7 @@ esp_err_t Ble_comm::begin(void){
     return ESP_OK;
 }
 
-void Ble_comm::sendMsg(char *msg, unsigned char len) {
+void Ble_comm::sendMsg(const char *msg, unsigned char len) {
     // 接続中かつconn_idが有効な場合のみ送信
     if (Ble_comm::profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
         Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id != 0xFFFF) {
@@ -564,7 +564,7 @@ void Ble_comm::sendMsg(char *msg, unsigned char len) {
             profile_tab[PROFILE_APP_IDX].conn_id,
             notify_targets[4].val_handle,
             len,
-            (uint8_t*)msg,
+            (uint8_t*)msg, // 送信APIの引数が非constなだけで、書き換えはされない
             false
         );
     }

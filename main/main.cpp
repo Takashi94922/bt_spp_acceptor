@@ -35,8 +35,8 @@
 #define SERVO_TIMEBASE_RESOLUTION_HZ 1000000  // 1MHz, 1us per tick
 #define SERVO_TIMEBASE_PERIOD        20000    // 20000 ticks, 20ms
 
-// 制御ループの周期設定。IMU/KFの周期を基本周期とし、制御計算はその整数倍で回す
-#define CONTROL_BASE_PERIOD_US 2000   // IMU/KF周期 [us]（2ms = 500Hz）
+// 制御ループの周期設定。IMUの周期（姿勢推定）を基本周期とし、制御計算はその整数倍で回す
+#define CONTROL_BASE_PERIOD_US 2000   // IMU周期 [us]（2ms = 500Hz）
 #define CONTROL_U_DIV          2      // 制御計算は基本周期N回に1回（2ms*2 = 4ms）
 #define CONTROL_TASK_CORE      1      // Bluedroid/BTコントローラはCore 0固定なのでCore 1で回す
 #define CONTROL_TASK_PRIO      20
@@ -73,29 +73,20 @@ enum GyroCalibStatus : uint8_t {
     GYRO_CALIB_REJECTED = 2,  // スロットルが0でないので実行しなかった
 };
 
-#define TAG "ESP_SPP_DRONE"
-
-//#define COMM_MODE_BT_SPP
+#define TAG "DRONE"
 
 Motor *Thrust, *Servo1, *Servo2, *Servo3, *Servo4;
 Motion_control motion;
 
-#ifdef COMM_MODE_BT_SPP
-    #include "bl_comm.h"
-    Bl_comm bl_comm;
-    void (*Bl_comm::command_cb)(uint8_t* data, uint16_t len) = command_cb; // or assign it to a valid function
-    uint32_t Bl_comm::clientHandle = 0;
-#else
-    #include "ble_gatt_comm.h"
-    void (*Ble_comm::command_cb)(uint8_t* data, uint16_t len) = command_cb;
-    Ble_comm bl_comm(
-        motion.sensor_telem,
-        motion.PRY_value,
-        motion.u.data, 
-        motion.KC.data,
-        motion.q.data
-    );
-#endif
+#include "ble_gatt_comm.h"
+void (*Ble_comm::command_cb)(uint8_t* data, uint16_t len) = command_cb;
+Ble_comm bl_comm(
+    motion.sensor_telem,
+    motion.PRY_value,
+    motion.u.data,
+    motion.KC.data,
+    motion.q.data
+);
 
 // 制御入力を計算してサーボに反映する
 static void apply_control()
@@ -265,7 +256,7 @@ static void start_control_timer(TaskHandle_t task)
 
 static void sensor_controller_init(float IMU_sampleFreq, float Cont_freq);
 
-// IMU読み出し・KF・制御計算を基本周期ごとに順番に実行するタスク
+// IMU読み出し・姿勢推定・制御計算を基本周期ごとに順番に実行するタスク
 static void control_task(void* arg)
 {
     // I2Cとgptimerの割り込みをこのタスクのコアに確保するため、初期化はタスク内で行う
@@ -294,7 +285,7 @@ static void control_task(void* arg)
         int64_t t0 = esp_timer_get_time();
         motion.setMotorRunning(Thrust->getPercent() > 0.0f);
         motion.update();
-        motion.filterUpdate();
+        motion.updateSensorTelem();
         if (++u_count >= CONTROL_U_DIV) {
             u_count = 0;
             apply_control();
@@ -384,7 +375,7 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         default: {   
             ESP_LOGI(TAG, "Unknown command.");
             if (bl_comm.isClientConnecting()) {
-                bl_comm.sendMsg("Unknown command.", 15);
+                bl_comm.sendMsg("Unknown command.", sizeof("Unknown command.") - 1);
             }
         }
     }
@@ -408,7 +399,6 @@ static void sensor_controller_init(float IMU_sampleFreq, float Cont_freq)
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_conf, &bus_handle));
 
     motion.begin(IMU_sampleFreq, Cont_freq, bus_handle);
-    //motion.correctInitValue(100);
 }
 
 // Servo生成・初期化関数
@@ -470,24 +460,12 @@ static void telemetry_task(void* arg)
         check_heartbeat();
 
         if (bl_comm.isClientConnecting()) {
-            //Throttle PRY x v a u
-            #ifdef COMM_MODE_BT_SPP
-            float msg[] = {Thrust->getPercent(),
-                motion.PRY_value[0], motion.PRY_value[1], motion.PRY_value[2],
-                motion.x(0, 0), motion.x(1, 0), motion.x(2, 0),
-                motion.sensor_telem[3], motion.sensor_telem[4], motion.sensor_telem[5],
-                motion.sensor_telem[0], motion.sensor_telem[1], motion.sensor_telem[2],
-                motion.u(0, 0), motion.u(1, 0), motion.u(2, 0), motion.u(3, 0), motion.u(4, 0)
-            };
-            bl_comm.sendMsg((char *)msg, sizeof(msg));
-            #else
             bl_comm.sendTelemetry();
             send_status();
             if (gain_read_requested) {
                 gain_read_requested = false;
                 send_gains();
             }
-            #endif
         }
 
         // 制御ループの負荷はLOOP_STATS_PERIOD_MSごとに集計して送る
@@ -500,9 +478,7 @@ static void telemetry_task(void* arg)
             .period_us = CONTROL_BASE_PERIOD_US,
         };
         ctrl_exec_max_us = 0;
-        #ifndef COMM_MODE_BT_SPP
         bl_comm.sendLoopStats(stats);
-        #endif
 
         // シリアルにも5回に1回だけ出す
         if (++log_count >= 5) {
@@ -525,16 +501,14 @@ extern "C" void app_main(void)
     pwm_init();
     
     bl_comm.setCommandCb(command_cb);
-    #ifndef COMM_MODE_BT_SPP
     bl_comm.setDisconnectCb(on_ble_disconnected);
     // KCの一括書き込み（ContGain_Upd）も制御計算と排他して反映する
     bl_comm.setGainUpdateCb([](const uint8_t* data, uint16_t len) {
         motion.setKC(data, 0, len / sizeof(float));
     });
-    #endif
     ESP_ERROR_CHECK(bl_comm.begin());
 
-    // IMU・KF・制御は専用タスクで回す（センサ初期化もタスク内で行う）
+    // IMU・姿勢推定・制御は専用タスクで回す（センサ初期化もタスク内で行う）
     if (xTaskCreatePinnedToCore(control_task, "control", 4096, NULL, CONTROL_TASK_PRIO, NULL, CONTROL_TASK_CORE) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create control task.");
     }
