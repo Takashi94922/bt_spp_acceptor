@@ -70,12 +70,12 @@ void Motion_control::Sensor2Body(){
 
 void Motion_control::filterUpdate(){
 	//Kalman Filterの更新処理だが、ESP32の性能を考慮して、計算はテレメトリ先で行う。
-	xhat(0, 0) = a_imu(0, 0);
-	xhat(1, 0) = a_imu(1, 0);
-	xhat(2, 0) = a_imu(2, 0);
-	xhat(3, 0) = g_imu(0, 0);
-	xhat(4, 0) = g_imu(1, 0);
-	xhat(5, 0) = g_imu(2, 0);	
+	// テレメトリ先で計算するためのセンサ値
+	for (int i = 0; i < 3; i++) {
+		sensor_telem[i] = a_imu(i, 0);
+		sensor_telem[3 + i] = g_imu(i, 0);
+		sensor_telem[6 + i] = m_imu(i, 0);
+	}
 
 	//以下はESP32で計算するばあいのコード。
 	/* 	
@@ -230,9 +230,10 @@ void Motion_control::update(){
 	g_imu(0, 0) = g_raw[0] - g_bias[0];
 	g_imu(1, 0) = g_raw[1] - g_bias[1];
 	g_imu(2, 0) = g_raw[2] - g_bias[2];
-	m_imu(0, 0) = -imu.calcMag(imu.mx) * 0.00014f;
-	m_imu(1, 0) = -imu.calcMag(imu.my) * 0.00014f;
-	m_imu(2, 0) = imu.calcMag(imu.mz) * 0.00014f; // gauss/LSB
+	// [gauss]。Madgwick は正規化して使うので、大きさは姿勢に影響しない
+	m_imu(0, 0) = -imu.calcMag(imu.mx);
+	m_imu(1, 0) = -imu.calcMag(imu.my);
+	m_imu(2, 0) = imu.calcMag(imu.mz);
 
 	//IMU座標系で姿勢を計算	
 	madgwick.update(g_imu(0, 0), g_imu(1, 0), g_imu(2, 0),
@@ -448,6 +449,31 @@ void Motion_control::setKC(const uint8_t *src, uint16_t first, uint16_t count){
 	if (first + count > (uint16_t)(KC.rows * KC.cols)) return;
 	taskENTER_CRITICAL(&param_lock);
 	memcpy(&KC.data[first], src, sizeof(float) * count);
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+void Motion_control::getPIDGains(float *out){
+	const PID* pids[] = {&pitch_pid, &roll_pid, &yaw_pid};
+	taskENTER_CRITICAL(&param_lock);
+	for (int i = 0; i < 3; i++) {
+		out[i * 3 + 0] = pids[i]->Kp;
+		out[i * 3 + 1] = pids[i]->Ki;
+		out[i * 3 + 2] = pids[i]->Kd;
+	}
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+void Motion_control::getPIDTargets(float *out){
+	taskENTER_CRITICAL(&param_lock);
+	out[0] = pitch_pid.target;
+	out[1] = roll_pid.target;
+	out[2] = yaw_pid.target;
+	taskEXIT_CRITICAL(&param_lock);
+}
+
+void Motion_control::getKC(float *out){
+	taskENTER_CRITICAL(&param_lock);
+	memcpy(out, KC.data, sizeof(float) * KC.rows * KC.cols);
 	taskEXIT_CRITICAL(&param_lock);
 }
 

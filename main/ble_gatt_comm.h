@@ -93,7 +93,7 @@ typedef struct {
 
 /* Service */
 constexpr uint16_t GATTS_SERVICE_UUID      = 0x00FF;
-constexpr uint16_t GATTS_CHAR_UUID_Xhat_Telem = 0xFF01;
+constexpr uint16_t GATTS_CHAR_UUID_Sensor_Telem = 0xFF01; // 加速度・ジャイロ・地磁気
 constexpr uint16_t GATTS_CHAR_UUID_PRY_Telem = 0xFF02;
 constexpr uint16_t GATTS_CHAR_UUID_contU_TelemWrite = 0xFF03;
 constexpr uint16_t GATTS_CHAR_UUID_ContGain_Upd = 0xFF04;
@@ -118,7 +118,7 @@ constexpr uint8_t char_prop_read_write_notify   = ESP_GATT_CHAR_PROP_BIT_WRITE_N
 
 class Ble_comm {
 public:
-    Ble_comm(float *xhat_value_p,float* PRY_value_p, float* controlU_p, float * controlGain_p, float *q_p);
+    Ble_comm(float *sensor_value_p,float* PRY_value_p, float* controlU_p, float * controlGain_p, float *q_p);
     esp_err_t begin();
 
     bool isClientConnecting(){
@@ -182,7 +182,7 @@ private:
     static notify_target_t* getNotifyTargetByCfgHandle(uint16_t cfg_handle);
     static notify_target_t* getNotifyTargetByValHandle(uint16_t val_handle);
     // BLE values and buffers
-    static float *xhat_value;
+    static float *sensor_value;
     static float *PRY_value;
     static float *controlU;
     static float *controlGain;

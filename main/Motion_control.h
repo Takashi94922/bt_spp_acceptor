@@ -171,6 +171,9 @@ public:
 	float *KCsrc = KC.data;
 	dspm::Mat P = dspm::Mat::eye(6);
 	dspm::Mat xhat = dspm::Mat(6, 1);
+	// BLE（Sensor_Telem）で送るセンサ値。IMU座標で符号変換・バイアス補正の後
+	// [0..2] 加速度[m/s^2]、[3..5] ジャイロ[rad/s]、[6..8] 地磁気[gauss]
+	float sensor_telem[9] = {0};
 	float gdot[3] = {0};
 	float thetadot[3] = {0};
 	PID pitch_pid, roll_pid, yaw_pid;
@@ -196,6 +199,10 @@ public:
 	void setPIDGain(uint8_t axis, uint8_t type, float value); // type 0:Kp 1:Ki 2:Kd
 	void setControlMethod(uint8_t method);
 	void setKC(const uint8_t *src, uint16_t first, uint16_t count); // KC.data[first..] にfloatをcount個
+	// モニターへの読み戻し用（BLEのタスクから呼ぶ）
+	void getPIDGains(float *out);   // pitch, roll, yaw の順に Kp, Ki, Kd（9個）
+	void getPIDTargets(float *out); // pitch, roll, yaw の目標値[rad]（3個）
+	void getKC(float *out);         // KC を行優先で 5×6 = 30個
 	bool calibrateGyroBias(uint16_t samples);
 	bool calibrateGyro(); // バイアスを測り直し、姿勢推定を素早く合わせ直す。静止していればtrue
 	void gyroImu(float *out);

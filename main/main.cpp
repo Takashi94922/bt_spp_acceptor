@@ -48,10 +48,21 @@
 #define TELEMETRY_TASK_PRIO    2
 
 // 緊急時（BLE切断・ハートビート途絶）の設定
-#define EMERGENCY_THROTTLE     30.0f  // 緊急時のスロットル上限[%]。0だと墜落するので降下できる推力を残す
+#define EMERGENCY_THROTTLE     0.0f   // 緊急時のスロットル上限[%]。推力を切る
 #define HEARTBEAT_TIMEOUT_MS   1000   // この時間コマンドが届かなければ緊急動作
 #define CMD_HEARTBEAT          18     // モニターからの生存通知コマンド（中身は使わない）
 #define CMD_GYRO_CALIB         19     // ジャイロのバイアス校正。結果は同じ番号で Command の通知に返す
+#define CMD_STATUS             20     // ドローン側の状態。TELEMETRY_PERIOD_MSごとに Command の通知で送る
+#define CMD_GAIN_READ          21     // ゲインの読み戻し要求。PIDとKCの各行を同じ番号で Command の通知に返す
+
+// CMD_STATUS の flags
+#define STATUS_FLAG_FAILSAFE    (1 << 0) // 緊急動作中（BLE切断・ハートビート途絶）
+#define STATUS_FLAG_CALIBRATING (1 << 1) // ジャイロ校正中
+#define STATUS_FLAG_HEARTBEAT   (1 << 2) // ハートビートの監視が有効
+
+// CMD_GAIN_READ の応答の種類（msg[1]）。KCは1行ずつ GAIN_KIND_KC_ROW0 + 行番号 で送る
+#define GAIN_KIND_PID           0
+#define GAIN_KIND_KC_ROW0       1
 
 // ジャイロ校正の結果（Command の通知で返す）
 enum GyroCalibStatus : uint8_t {
@@ -76,7 +87,7 @@ Motion_control motion;
     #include "ble_gatt_comm.h"
     void (*Ble_comm::command_cb)(uint8_t* data, uint16_t len) = command_cb;
     Ble_comm bl_comm(
-        motion.xhat.data,
+        motion.sensor_telem,
         motion.PRY_value,
         motion.u.data, 
         motion.KC.data,
@@ -159,6 +170,55 @@ static void send_gyro_calib_result(uint8_t status)
         memcpy(&msg[2 + sizeof(float) * i], &b, sizeof(float));
     }
     bl_comm.sendMsg(msg, sizeof(msg));
+}
+
+// ---- モニターへの状態の返送・ゲインの読み戻し ----
+// 読み戻しはコマンドでは要求を立てるだけにし、テレメトリタスクから送る（BLEのコールバック内でまとめて送らない）
+static volatile bool gain_read_requested = false;
+
+// [CMD_STATUS, 制御モード, flags, 0, スロットル[%], 目標 pitch/roll/yaw[rad]]（float）
+static void send_status()
+{
+    uint8_t flags = 0;
+    if (failsafe_active) flags |= STATUS_FLAG_FAILSAFE;
+    if (gyro_calibrating) flags |= STATUS_FLAG_CALIBRATING;
+    if (heartbeat_armed) flags |= STATUS_FLAG_HEARTBEAT;
+
+    float values[4];
+    values[0] = Thrust->getPercent();
+    motion.getPIDTargets(&values[1]);
+
+    char msg[4 + sizeof(values)];
+    msg[0] = CMD_STATUS;
+    msg[1] = motion.ControlMethod;
+    msg[2] = flags;
+    msg[3] = 0;
+    memcpy(&msg[4], values, sizeof(values));
+    bl_comm.sendMsg(msg, sizeof(msg));
+}
+
+// [CMD_GAIN_READ, GAIN_KIND_PID, pitch/roll/yaw の Kp Ki Kd]（float 9個）
+// [CMD_GAIN_READ, GAIN_KIND_KC_ROW0 + 行, KCの1行]（float 6個）を5行分
+static void send_gains()
+{
+    float pid[9];
+    motion.getPIDGains(pid);
+    char pid_msg[2 + sizeof(pid)];
+    pid_msg[0] = CMD_GAIN_READ;
+    pid_msg[1] = GAIN_KIND_PID;
+    memcpy(&pid_msg[2], pid, sizeof(pid));
+    bl_comm.sendMsg(pid_msg, sizeof(pid_msg));
+
+    constexpr int KC_ROWS = 5, KC_COLS = 6;
+    float kc[KC_ROWS * KC_COLS];
+    motion.getKC(kc);
+    for (int row = 0; row < KC_ROWS; row++) {
+        char kc_msg[2 + sizeof(float) * KC_COLS];
+        kc_msg[0] = CMD_GAIN_READ;
+        kc_msg[1] = GAIN_KIND_KC_ROW0 + row;
+        memcpy(&kc_msg[2], &kc[row * KC_COLS], sizeof(float) * KC_COLS);
+        bl_comm.sendMsg(kc_msg, sizeof(kc_msg));
+    }
 }
 
 // 制御ループの負荷計測（app_mainで定期的にログ出力する）
@@ -301,6 +361,10 @@ static void command_cb(uint8_t *msg, uint16_t msglen){
         // ハートビート（受信時刻の更新はon_command_receivedで済んでいる）
         case CMD_HEARTBEAT:
             break;
+        // ゲインの読み戻し（送信はテレメトリタスクで行う）
+        case CMD_GAIN_READ:
+            gain_read_requested = true;
+            break;
         // ジャイロ校正。校正中は制御が止まるので、スロットル0のとき（地上で静止）だけ受け付ける
         case CMD_GYRO_CALIB:
             if (Thrust->getPercent() > 0.0f) {
@@ -404,13 +468,18 @@ static void telemetry_task(void* arg)
             float msg[] = {Thrust->getPercent(),
                 motion.PRY_value[0], motion.PRY_value[1], motion.PRY_value[2],
                 motion.x(0, 0), motion.x(1, 0), motion.x(2, 0),
-                motion.xhat(3, 0), motion.xhat(4, 0), motion.xhat(5, 0),
-                motion.xhat(0, 0), motion.xhat(1, 0), motion.xhat(2, 0),
+                motion.sensor_telem[3], motion.sensor_telem[4], motion.sensor_telem[5],
+                motion.sensor_telem[0], motion.sensor_telem[1], motion.sensor_telem[2],
                 motion.u(0, 0), motion.u(1, 0), motion.u(2, 0), motion.u(3, 0), motion.u(4, 0)
             };
             bl_comm.sendMsg((char *)msg, sizeof(msg));
             #else
             bl_comm.sendTelemetry();
+            send_status();
+            if (gain_read_requested) {
+                gain_read_requested = false;
+                send_gains();
+            }
             #endif
         }
 

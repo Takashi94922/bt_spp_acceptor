@@ -19,17 +19,17 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&primary_service_uuid, ESP_GATT_PERM_READ,
     sizeof(uint16_t), sizeof(GATTS_SERVICE_UUID), (uint8_t *)&GATTS_SERVICE_UUID}},
 
-    /* Xhat Notify Characteristic Declaration */
+    /* Sensor Notify Characteristic Declaration */
     [IDX_CHAR_A]     =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
     CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
 
-    /*  Xhat Notify Value */
+    /*  Sensor Notify Value */
     [IDX_CHAR_VAL_A] =
-    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Xhat_Telem, ESP_GATT_PERM_READ,
-    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)xhat_value}},
+    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_Sensor_Telem, ESP_GATT_PERM_READ,
+    GATTS_DEMO_CHAR_VAL_LEN_MAX, 0, (uint8_t *)sensor_value}},
 
-    /* Xhat Notify  Client Characteristic Configuration Descriptor */
+    /* Sensor Notify  Client Characteristic Configuration Descriptor */
     [IDX_CHAR_CFG_A]  =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
     sizeof(uint16_t), sizeof(uint16_t), (uint8_t *)Ble_comm::cfg_val_on}},
@@ -124,7 +124,7 @@ esp_gatts_attr_db_t Ble_comm::gatt_db[IDX_NB] = {
 loop_stats_t Ble_comm::loop_stats = {0, 0, 0};
 
 notify_target_t Ble_comm::notify_targets[7] = {
-    {0, 0, (uint8_t *)xhat_value, sizeof(float)*6, "A"},
+    {0, 0, (uint8_t *)sensor_value, sizeof(float)*9, "A"}, // 加速度・ジャイロ・地磁気（Motion_control::sensor_telem）
     {0, 0, (uint8_t *)PRY_value, sizeof(float)*3, "B"},
     {0, 0, (uint8_t *)controlU, sizeof(float)*5, "C"},
     {0, 0, (uint8_t *)controlGain, sizeof(float)*5*6, "D"},
@@ -133,20 +133,20 @@ notify_target_t Ble_comm::notify_targets[7] = {
     {0, 0, (uint8_t *)&Ble_comm::loop_stats, sizeof(loop_stats_t), "G"},
 };
 
-Ble_comm::Ble_comm(float *xhat_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p, float *q_p) {
-    Ble_comm::xhat_value = xhat_value_p;
+Ble_comm::Ble_comm(float *sensor_value_p,float *PRY_value_p, float *controlU_p, float *controlGain_p, float *q_p) {
+    Ble_comm::sensor_value = sensor_value_p;
     Ble_comm::controlU = controlU_p;
     Ble_comm::controlGain = controlGain_p;
     Ble_comm::PRY_value = PRY_value_p;
     Ble_comm::q = q_p;
 
-    Ble_comm::gatt_db[IDX_CHAR_VAL_A].att_desc.value = (uint8_t *)xhat_value;
+    Ble_comm::gatt_db[IDX_CHAR_VAL_A].att_desc.value = (uint8_t *)sensor_value;
     Ble_comm::gatt_db[IDX_CHAR_VAL_B].att_desc.value = (uint8_t *)PRY_value;
     Ble_comm::gatt_db[IDX_CHAR_VAL_C].att_desc.value = (uint8_t *)controlU;
     Ble_comm::gatt_db[IDX_CHAR_VAL_D].att_desc.value = (uint8_t *)controlGain;
     Ble_comm::gatt_db[IDX_CHAR_VAL_F].att_desc.value = (uint8_t *)q;
 
-    Ble_comm::notify_targets[0].value_ptr = (uint8_t *)xhat_value;
+    Ble_comm::notify_targets[0].value_ptr = (uint8_t *)sensor_value;
     Ble_comm::notify_targets[1].value_ptr = (uint8_t *)PRY_value;
     Ble_comm::notify_targets[2].value_ptr = (uint8_t *)controlU;
     Ble_comm::notify_targets[3].value_ptr = (uint8_t *)controlGain;
@@ -173,7 +173,7 @@ notify_target_t* Ble_comm::getNotifyTargetByValHandle(uint16_t val_handle) {
 }
 
 uint8_t Ble_comm::adv_config_done = 0;
-float *Ble_comm::xhat_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_comm::controlGain, *Ble_comm::q;
+float *Ble_comm::sensor_value, *Ble_comm::PRY_value, *Ble_comm::controlU, *Ble_comm::controlGain, *Ble_comm::q;
 
 prepare_type_env_t *Ble_comm::env_list[5];
 void (*Ble_comm::disconnect_cb)() = nullptr;
@@ -573,7 +573,7 @@ void Ble_comm::sendTelemetry(){
     if (Ble_comm::profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE &&
         Ble_comm::profile_tab[PROFILE_APP_IDX].conn_id != 0xFFFF) {
         //Telemetryするリスト
-        uint8_t telem_list[] = {0, 1, 2, 5}; // Xhat, PRY, Control U, Quaternion
+        uint8_t telem_list[] = {0, 1, 2, 5}; // Sensor, PRY, Control U, Quaternion
         for (uint8_t i = 0; i < sizeof(telem_list)/sizeof(telem_list[0]); i++)
         {
             // 送信バッファ溢れ等で失敗しても飛行中にabortさせない。今回分は諦めて次周期に送る
