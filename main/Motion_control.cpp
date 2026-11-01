@@ -291,6 +291,12 @@ void Motion_control::calcU(){
 		yaw_pid.reset();
 		prev_method = ControlMethod;
 	}
+	// モーター停止中（地上）は積分しない。地面の傾きの分がたまり、離陸の瞬間に舵が入るのを防ぐ
+	if (!motor_running) {
+		pitch_pid.reset();
+		roll_pid.reset();
+		yaw_pid.reset();
+	}
 
 	if (ControlMethod == 0 || ControlMethod == 1) {
 		// 状態は機体座標の姿勢角（PIDと共通の目標値との差）。x1～x3 と x6 は推定していないので0
